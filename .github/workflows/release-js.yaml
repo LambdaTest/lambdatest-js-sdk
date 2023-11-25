@@ -11,6 +11,9 @@ jobs:
     steps:
       - name: Check out code
         uses: actions/checkout@v3
+      
+      - name: Change directory to ./js
+        run: cd ./js
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
