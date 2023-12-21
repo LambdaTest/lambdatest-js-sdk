@@ -5,7 +5,7 @@
   "main": "index.js",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/LambdaTest/lambdatet-js-sdk",
+    "url": "git+https://github.com/LambdaTest/lambdatest-js-sdk",
     "directory": "packages/sdk-utils"
   },
   "type": "module",
