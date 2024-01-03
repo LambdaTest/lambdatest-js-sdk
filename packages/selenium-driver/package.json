@@ -1,12 +1,12 @@
 {
   "name": "@lambdatest/selenium-driver",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Selenium driver for all Lambdatest functionalities",
   "main": "index.js",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/LambdaTest/lambdatet-sdk",
-    "directory": "js/packages/selenium-driver"
+    "url": "git+https://github.com/LambdaTest/lambdatest-js-sdk",
+    "directory": "packages/selenium-driver"
   },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"

@@ -22,15 +22,9 @@ jobs:
         run: npm install -g pnpm
 
       - name: Install dependencies
-        run: |
-          ls -a
-          cd ./js
-          pnpm install
+        run: pnpm install
 
       - name: Publish packages
-        run: |
-          ls -a
-          cd ./js
-          pnpm publish --recursive --access public --no-git-checks
+        run: pnpm publish --recursive --access public --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

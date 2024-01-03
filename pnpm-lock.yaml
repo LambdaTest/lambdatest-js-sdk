@@ -6,8 +6,6 @@ settings:
 
 importers:
 
-  .: {}
-
   packages/sdk-utils:
     dependencies:
       axios:
