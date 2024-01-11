@@ -1,7 +1,7 @@
-import { isSmartUIRunning, fetchDOMSerializer, postSnapshot } from './src/smartui.js'
-import logger from './src/lib/logger.js'
+const { isSmartUIRunning, fetchDOMSerializer, postSnapshot } = require('./src/smartui');
+const logger = require('./src/lib/logger'); 
 
-export default {
+module.exports = {
     logger,
     fetchDOMSerializer,
     postSnapshot,
