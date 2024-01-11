@@ -1,7 +1,7 @@
-import axios from 'axios'
-import utils from './utils.js'
+const axios = require('axios'); 
+const utils = require('./utils');
 
-class httpClient {
+module.exports = new class httpClient {
     async request(config) {
         return axios.request(config)
             .then(resp => {
@@ -47,6 +47,4 @@ class httpClient {
             }
         })
     }
-}
-
-export default new httpClient();
+};

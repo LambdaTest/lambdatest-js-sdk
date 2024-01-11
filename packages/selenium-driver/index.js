@@ -1,5 +1,5 @@
-import { smartuiSnapshot } from './src/smartui.js';
+const { smartuiSnapshot } = require('./src/smartui');
 
-export {
+module.exports = {
     smartuiSnapshot
-};
+}

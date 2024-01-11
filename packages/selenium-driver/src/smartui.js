@@ -1,8 +1,7 @@
-import utils from '@lambdatest/sdk-utils'
-import { getPackageName } from './utils.js';
-const pkgName = getPackageName()
+const utils = require('@lambdatest/sdk-utils');
+const pkgName = require('../package.json').name;
 
-export async function smartuiSnapshot(driver, snapshotName) {
+async function smartuiSnapshot(driver, snapshotName) {
     // TODO: check if driver is selenium webdriver object
     if (!driver) throw new Error('An instance of the selenium driver object is required.');
     if (!snapshotName) throw new Error('The `snapshotName` argument is required.');
@@ -22,4 +21,8 @@ export async function smartuiSnapshot(driver, snapshotName) {
     } catch (error) {
         throw new Error(error);
     }
+}
+
+module.exports = {
+    smartuiSnapshot
 }

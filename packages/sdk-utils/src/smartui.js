@@ -1,9 +1,9 @@
-import client from './lib/httpClient.js'
-import logger from './lib/logger.js'
-import utils from './lib/utils.js'
-const log = logger(utils.getPackageName())
+const client = require('./lib/httpClient');
+const logger = require('./lib/logger');
+const utils = require('./lib/utils');
+const log = logger(require('../package.json').name);
 
-export async function isSmartUIRunning() {
+async function isSmartUIRunning() {
     try {
         await client.isSmartUIRunning();
         return true;
@@ -13,7 +13,7 @@ export async function isSmartUIRunning() {
     }
 }
 
-export async function fetchDOMSerializer() {
+async function fetchDOMSerializer() {
     try {
         return await client.fetchDOMSerializer();
     } catch (error) {
@@ -22,7 +22,7 @@ export async function fetchDOMSerializer() {
     }
 }
 
-export async function postSnapshot(snapshotDOM, snapshotName, testType) {
+async function postSnapshot(snapshotDOM, snapshotName, testType) {
     const data = JSON.stringify({
         snapshot: {
             dom: snapshotDOM,
@@ -37,4 +37,10 @@ export async function postSnapshot(snapshotDOM, snapshotName, testType) {
         log.debug(error);
         throw new Error(`post snapshot failed`);
     }
+}
+
+module.exports = {
+    isSmartUIRunning,
+    fetchDOMSerializer,
+    postSnapshot
 }
