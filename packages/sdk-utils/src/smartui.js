@@ -22,12 +22,9 @@ async function fetchDOMSerializer() {
     }
 }
 
-async function postSnapshot(snapshotDOM, snapshotName, testType) {
+async function postSnapshot(snapshot, testType) {
     const data = JSON.stringify({
-        snapshot: {
-            dom: snapshotDOM,
-            name: snapshotName
-        },
+        snapshot,
         testType
     });
       
