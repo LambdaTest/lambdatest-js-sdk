@@ -1,5 +1,5 @@
 {
-  "name": "@lambdatest/puppeteer",
+  "name": "@lambdatest/puppeteer-driver",
   "version": "1.0.0",
   "description": "Puppeteer SDK for smart UI",
   "main": "index.js",
