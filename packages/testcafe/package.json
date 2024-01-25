@@ -4,13 +4,13 @@
     "description": "Testcafe SDK for LambdaTest smart UI",
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/LambdaTest/lambdatest-js-sdk.git"
+        "url": "git+https://github.com/LambdaTest/lambdatest-js-sdk.git",
+        "directory": "packages/testcafe"
     },
     "main": "index.js",
     "scripts": {
-        "build": "gulp build",
-        "test": "gulp test"
-    },
+        "test": "echo \"Error: no test specified\" && exit 1"
+      },
     "keywords": [
         "lambdatest",
         "testcafe",
@@ -22,6 +22,7 @@
         "url": "https://github.com/LambdaTest/lambdatest-js-sdk/issues"
       },
 
+    "homepage": "https://github.com/LambdaTest/lambdatest-js-sdk#readme",
     "devDependencies": {
         "testcafe": "^3.4.0"
     },
