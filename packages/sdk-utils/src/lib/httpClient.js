@@ -14,7 +14,7 @@ module.exports = new class httpClient {
             })
             .catch(error => {
                 if (error.response) {
-                    throw new Error(JSON.stringify(error.response.data));
+                    throw new Error(error.response.data.error.message);
                 }
                 if (error.request) {
                     throw new Error(error.toJSON().message);

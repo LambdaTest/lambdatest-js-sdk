@@ -18,7 +18,7 @@ async function fetchDOMSerializer() {
         return await client.fetchDOMSerializer();
     } catch (error) {
         log.debug(error);
-        throw new Error(`fetch DOMSerializer failed`);
+        throw new Error(`fetch DOMSerializer failed; ${error.message}`);
     }
 }
 
@@ -32,7 +32,7 @@ async function postSnapshot(snapshot, testType) {
         return await client.postSnapshot(data);
     } catch (error) {
         log.debug(error);
-        throw new Error(`post snapshot failed`);
+        throw new Error(`post snapshot failed; ${error.message}`);
     }
 }
 
