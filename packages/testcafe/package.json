@@ -1,0 +1,34 @@
+{
+    "name": "@lambdatest/testcafe-driver",
+    "version": "1.0.0",
+    "description": "Testcafe SDK for LambdaTest smart UI",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/LambdaTest/lambdatest-js-sdk.git"
+    },
+    "main": "index.js",
+    "scripts": {
+        "build": "gulp build",
+        "test": "gulp test"
+    },
+    "keywords": [
+        "lambdatest",
+        "testcafe",
+        "smartui"
+    ],
+    "author": "LambdaTest <keys@lambdatest.com>",
+    "license": "MIT",
+    "bugs": {
+        "url": "https://github.com/LambdaTest/lambdatest-js-sdk/issues"
+      },
+
+    "devDependencies": {
+        "testcafe": "^3.4.0"
+    },
+    "peerDependencies": {
+        "testcafe": ">=1"
+      },
+      "dependencies": {
+        "@lambdatest/sdk-utils": "workspace:^"
+      }
+}
