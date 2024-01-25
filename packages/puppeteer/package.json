@@ -1,0 +1,28 @@
+{
+  "name": "@lambdatest/puppeteer-driver",
+  "version": "1.0.0",
+  "description": "Puppeteer SDK for smart UI",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LambdaTest/lambdatest-js-sdk.git",
+    "directory": "packages/puppeteer"
+  },
+  "keywords": [
+    "lambdatest",
+    "puppeteer",
+    "smartui"
+  ],
+  "author": "LambdaTest <keys@lambdatest.com>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/LambdaTest/lambdatest-js-sdk/issues"
+  },
+  "homepage": "https://github.com/LambdaTest/lambdatest-js-sdk#readme",
+  "dependencies": {
+    "@lambdatest/sdk-utils": "workspace:^"
+  }
+}
