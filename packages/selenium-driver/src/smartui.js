@@ -19,7 +19,7 @@ async function smartuiSnapshot(driver, name, options = {}) {
 
         let { body } = await utils.postSnapshot({url, name, dom, options}, pkgName);
         log.info(`Snapshot captured: ${name}`);
-        if (body.data.warnings?.length !== 0) body.data.warnings.map(e => log.warn(e));
+        if (body && body.data && body.data.warnings?.length !== 0) body.data.warnings.map(e => log.warn(e));
     } catch (error) {
         throw new Error(error);
     }
