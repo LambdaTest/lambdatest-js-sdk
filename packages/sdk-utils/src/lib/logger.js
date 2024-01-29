@@ -20,10 +20,10 @@ module.exports = function logger(logContext) {
 						message = chalk.blue(message);
 						break;
 					case 'warn':
-						message = chalk.yellow(message);
+						message = chalk.yellow(`Warning: ${message}`);
 						break;
 					case 'error':
-						message = chalk.red(message);
+						message = chalk.red(`Error: ${message}`);
 						break;
 				}
 				return `[${logContext}] ${message}`;
