@@ -25,7 +25,7 @@ async function smartuiSnapshot(page, name, options = {}) {
 
         // Post it to the SmartUI server.
         await utils.postSnapshot({
-            dom: dom.html,
+            dom,
             url,
             name,
             options
