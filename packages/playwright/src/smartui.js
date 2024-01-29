@@ -23,7 +23,7 @@ async function smartuiSnapshot(page, snapshotName, options) {
 
     // Post the DOM to the snapshot endpoint with snapshot options and other info
     await utils.postSnapshot({
-      dom: dom.html,
+      dom,
       url: page.url(),
       name: snapshotName,
       options
