@@ -1,7 +1,7 @@
-import axios from 'axios'
-import utils from './utils.js'
+const axios = require('axios'); 
+const utils = require('./utils');
 
-class httpClient {
+module.exports = new class httpClient {
     async request(config) {
         return axios.request(config)
             .then(resp => {
@@ -14,7 +14,7 @@ class httpClient {
             })
             .catch(error => {
                 if (error.response) {
-                    throw new Error(JSON.stringify(error.response.data));
+                    throw new Error(error.response.data.error.message);
                 }
                 if (error.request) {
                     throw new Error(error.toJSON().message);
@@ -47,6 +47,4 @@ class httpClient {
             }
         })
     }
-}
-
-export default new httpClient();
+};

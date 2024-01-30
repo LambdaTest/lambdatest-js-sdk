@@ -1,11 +1,10 @@
-import utils from '@lambdatest/sdk-utils'
-import { getPackageName } from './utils.js';
-const pkgName = getPackageName()
+const utils = require('@lambdatest/sdk-utils');
+const pkgName = require('../package.json').name;
 
-export async function smartuiSnapshot(driver, snapshotName) {
+async function smartuiSnapshot(driver, name, options = {}) {
     // TODO: check if driver is selenium webdriver object
     if (!driver) throw new Error('An instance of the selenium driver object is required.');
-    if (!snapshotName) throw new Error('The `snapshotName` argument is required.');
+    if (!name) throw new Error('The `name` argument is required.');
     if (!(await utils.isSmartUIRunning())) throw new Error('SmartUI server is not running.');
     let log = utils.logger(pkgName);
 
@@ -13,13 +12,19 @@ export async function smartuiSnapshot(driver, snapshotName) {
         let resp = await utils.fetchDOMSerializer();
         await driver.executeScript(resp.body.data.dom);
 
-        let { dom } = await driver.executeScript(options => ({
-            dom: SmartUIDOM.serialize(options)
+        let { dom, url } = await driver.executeScript(options => ({
+            dom: SmartUIDOM.serialize(options),
+            url: document.URL
         }), {});
 
-        await utils.postSnapshot(dom.html, snapshotName, pkgName);
-        log.info(`Snapshot captured: ${snapshotName}`);
+        let { body } = await utils.postSnapshot({url, name, dom, options}, pkgName);
+        log.info(`Snapshot captured: ${name}`);
+        if (body && body.data && body.data.warnings?.length !== 0) body.data.warnings.map(e => log.warn(e));
     } catch (error) {
         throw new Error(error);
     }
+}
+
+module.exports = {
+    smartuiSnapshot
 }

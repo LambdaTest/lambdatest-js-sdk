@@ -1,6 +1,6 @@
 {
   "name": "@lambdatest/selenium-driver",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Selenium driver for all Lambdatest functionalities",
   "main": "index.js",
   "repository": {
@@ -11,7 +11,6 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "type": "module",
   "keywords": [
     "lambdatest",
     "selenium"
