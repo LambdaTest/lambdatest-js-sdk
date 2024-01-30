@@ -23,7 +23,7 @@ async function smartuiSnapshot(t, snapshotName, options) {
             url: window.location.href || document.URL,
         }), { boundTestRun: t, dependencies: {} });
 
-        await utils.postSnapshot({
+        let { body } = await utils.postSnapshot({
             dom: dom,
             url,
             name: snapshotName,
@@ -31,6 +31,8 @@ async function smartuiSnapshot(t, snapshotName, options) {
         }, pkgName);
 
         log.info(`Snapshot captured: ${snapshotName}`);
+
+        if (body && body.data && body.data.warnings?.length !== 0) body.data.warnings.map(e => log.warn(e));
     } catch (error) {
         // Handle errors
         throw error;

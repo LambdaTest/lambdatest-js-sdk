@@ -24,7 +24,7 @@ async function smartuiSnapshot(page, name, options = {}) {
 
 
         // Post it to the SmartUI server.
-        await utils.postSnapshot({
+        let { body } = await utils.postSnapshot({
             dom,
             url,
             name,
@@ -32,6 +32,8 @@ async function smartuiSnapshot(page, name, options = {}) {
         }, pkgName);
 
         log.info(`Snapshot captured: ${name}`);
+        
+        if (body && body.data && body.data.warnings?.length !== 0) body.data.warnings.map(e => log.warn(e));
     } catch (error) {
         throw new Error(error);
     }
