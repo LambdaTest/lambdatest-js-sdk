@@ -22,7 +22,7 @@ async function smartuiSnapshot(page, snapshotName, options) {
     }), {});
 
     // Post the DOM to the snapshot endpoint with snapshot options and other info
-    await utils.postSnapshot({
+    let { body } = await utils.postSnapshot({
       dom,
       url: page.url(),
       name: snapshotName,
@@ -30,6 +30,8 @@ async function smartuiSnapshot(page, snapshotName, options) {
     }, pkgName);
 
     log.info(`Snapshot captured: ${snapshotName}`);
+
+    if (body && body.data && body.data.warnings?.length !== 0) body.data.warnings.map(e => log.warn(e));
   } catch (err) {
     throw err;
   }
