@@ -1,6 +1,6 @@
 {
   "name": "@lambdatest/selenium-driver",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Selenium driver for all Lambdatest functionalities",
   "main": "index.js",
   "repository": {
