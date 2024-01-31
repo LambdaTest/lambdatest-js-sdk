@@ -2,10 +2,10 @@ const utils = require('@lambdatest/sdk-utils');
 const pkgName = require('../package.json').name;
 
 // Take a DOM snapshot and post it to the snapshot endpoint
-async function smartuiSnapshot(page, snapshotName, options) {
+async function smartuiSnapshot(page, name, options) {
   if (!page) throw new Error('A Playwright `page` object is required.');
-  if (!snapshotName) throw new Error('The `name` argument is required.');
-  if (!(await utils.isSmartUIRunning())) throw new Error('SmartUI server is not running.');
+  if (!name || typeof name !== 'string') throw new Error('The `name` argument is required.');
+  if (!(await utils.isSmartUIRunning())) throw new Error('Cannot find SmartUI server.');
 
   let log = utils.logger(pkgName);
 
@@ -25,11 +25,11 @@ async function smartuiSnapshot(page, snapshotName, options) {
     let { body } = await utils.postSnapshot({
       dom,
       url: page.url(),
-      name: snapshotName,
+      name,
       options
     }, pkgName);
 
-    log.info(`Snapshot captured: ${snapshotName}`);
+    log.info(`Snapshot captured: ${name}`);
 
     if (body && body.data && body.data.warnings?.length !== 0) body.data.warnings.map(e => log.warn(e));
   } catch (err) {

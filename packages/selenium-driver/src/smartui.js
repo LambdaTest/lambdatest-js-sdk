@@ -4,8 +4,8 @@ const pkgName = require('../package.json').name;
 async function smartuiSnapshot(driver, name, options = {}) {
     // TODO: check if driver is selenium webdriver object
     if (!driver) throw new Error('An instance of the selenium driver object is required.');
-    if (!name) throw new Error('The `name` argument is required.');
-    if (!(await utils.isSmartUIRunning())) throw new Error('SmartUI server is not running.');
+    if (!name || typeof name !== 'string') throw new Error('The `name` argument is required.');
+    if (!(await utils.isSmartUIRunning())) throw new Error('Cannot find SmartUI server.');
     let log = utils.logger(pkgName);
 
     try {
