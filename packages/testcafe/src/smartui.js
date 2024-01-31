@@ -1,10 +1,10 @@
 const utils = require('@lambdatest/sdk-utils');
 const pkgName = require('../package.json').name;
 
-async function smartuiSnapshot(t, snapshotName, options) {
+async function smartuiSnapshot(t, name, options) {
     if (!t) throw new Error("The test function's `t` argument is required.");
-    if (!snapshotName) throw new Error('The `name` argument is required.');
-    if (!(await utils.isSmartUIRunning())) throw new Error('SmartUI server is not running.');
+    if (!name || typeof name !== 'string') throw new Error('The `name` argument is required.');
+    if (!(await utils.isSmartUIRunning())) throw new Error('Cannot find SmartUI server.');
   
     let log = utils.logger(pkgName);
 
@@ -26,11 +26,11 @@ async function smartuiSnapshot(t, snapshotName, options) {
         let { body } = await utils.postSnapshot({
             dom: dom,
             url,
-            name: snapshotName,
+            name,
             options
         }, pkgName);
 
-        log.info(`Snapshot captured: ${snapshotName}`);
+        log.info(`Snapshot captured: ${name}`);
 
         if (body && body.data && body.data.warnings?.length !== 0) body.data.warnings.map(e => log.warn(e));
     } catch (error) {
