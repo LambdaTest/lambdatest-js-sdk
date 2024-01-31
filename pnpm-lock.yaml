@@ -6,6 +6,18 @@ settings:
 
 importers:
 
+  packages/playwright:
+    dependencies:
+      '@lambdatest/sdk-utils':
+        specifier: workspace:^
+        version: link:../sdk-utils
+
+  packages/puppeteer:
+    dependencies:
+      '@lambdatest/sdk-utils':
+        specifier: workspace:^
+        version: link:../sdk-utils
+
   packages/sdk-utils:
     dependencies:
       axios:
@@ -19,6 +31,12 @@ importers:
         version: 3.11.0
 
   packages/selenium-driver:
+    dependencies:
+      '@lambdatest/sdk-utils':
+        specifier: workspace:^
+        version: link:../sdk-utils
+
+  packages/testcafe:
     dependencies:
       '@lambdatest/sdk-utils':
         specifier: workspace:^
