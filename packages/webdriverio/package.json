@@ -1,0 +1,23 @@
+{
+  "name": "@lambdatest/wdio-driver",
+  "version": "1.0.3",
+  "description": "WebdriverIO driver for all Lambdatest functionalities",
+  "main": "index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LambdaTest/lambdatest-js-sdk",
+    "directory": "packages/wdio-driver"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "lambdatest",
+    "webdriverio"
+  ],
+  "author": "LambdaTest <keys@lambdatest.com>",
+  "license": "MIT",
+  "dependencies": {
+    "@lambdatest/sdk-utils": "workspace:^"
+  }
+}

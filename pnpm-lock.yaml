@@ -42,6 +42,12 @@ importers:
         specifier: workspace:^
         version: link:../sdk-utils
 
+  packages/webdriverio:
+    dependencies:
+      '@lambdatest/sdk-utils':
+        specifier: workspace:^
+        version: link:../sdk-utils
+
 packages:
 
   /@colors/colors@1.6.0:
