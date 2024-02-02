@@ -1,1 +1,1 @@
-# lambdatest-sdk
+# lambdatest-js-sdk

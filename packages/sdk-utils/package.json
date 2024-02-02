@@ -1,13 +1,17 @@
 {
   "name": "@lambdatest/sdk-utils",
   "version": "1.0.3",
-  "description": "",
+  "description": "LambdaTest driver utils",
   "main": "index.js",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/LambdaTest/lambdatest-js-sdk",
     "directory": "packages/sdk-utils"
   },
+  "bugs": {
+		"url": "https://github.com/LambdaTest/lambdatest-js-sdk/issues"
+	},
+	"homepage": "https://github.com/LambdaTest/lambdatest-js-sdk/packages/sdk-utils#readme",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },

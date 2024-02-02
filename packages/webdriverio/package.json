@@ -6,8 +6,12 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/LambdaTest/lambdatest-js-sdk",
-    "directory": "packages/wdio-driver"
+    "directory": "packages/webdriverio"
   },
+  "bugs": {
+    "url": "https://github.com/LambdaTest/lambdatest-js-sdk/issues"
+  },
+  "homepage": "https://github.com/LambdaTest/lambdatest-js-sdk/packages/webdriverio#readme",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
@@ -19,5 +23,11 @@
   "license": "MIT",
   "dependencies": {
     "@lambdatest/sdk-utils": "workspace:^"
+  },
+  "devDependencies": {
+    "webdriverio": ">=7"
+  },
+  "peerDependencies": {
+    "webdriverio": ">=7"
   }
 }
