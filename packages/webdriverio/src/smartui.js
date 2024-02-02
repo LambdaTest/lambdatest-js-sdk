@@ -17,9 +17,10 @@ async function smartuiSnapshot(browser, name, options = {}) {
             url: document.URL
         }), {});
 
-        let { body } = await utils.postSnapshot({url, name, dom, options}, testType);
-        log.info(`Snapshot captured: ${name}`);
+        let { body } = await utils.postSnapshot({ url, name, dom, options }, testType);
         if (body && body.data && body.data.warnings?.length !== 0) body.data.warnings.map(e => log.warn(e));
+
+        log.info(`Snapshot captured: ${name}`);
     } catch (error) {
         log.error(`SmartUI snapshot failed "${name}"`);
         log.error(error);

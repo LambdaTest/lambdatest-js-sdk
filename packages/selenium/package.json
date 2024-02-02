@@ -6,8 +6,12 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/LambdaTest/lambdatest-js-sdk",
-    "directory": "packages/selenium-driver"
+    "directory": "packages/selenium"
   },
+  "bugs": {
+    "url": "https://github.com/LambdaTest/lambdatest-js-sdk/issues"
+  },
+  "homepage": "https://github.com/LambdaTest/lambdatest-js-sdk/packages/selenium#readme",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
@@ -19,5 +23,11 @@
   "license": "MIT",
   "dependencies": {
     "@lambdatest/sdk-utils": "workspace:^"
+  },
+  "devDependencies": {
+    "selenium-webdriver": ">=4"
+  },
+  "peerDependencies": {
+    "selenium-webdriver": ">=4"
   }
 }
