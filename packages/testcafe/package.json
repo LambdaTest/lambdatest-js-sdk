@@ -1,6 +1,6 @@
 {
   "name": "@lambdatest/testcafe-driver",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Testcafe SDK for LambdaTest smart UI",
   "main": "index.js",
   "repository": {
