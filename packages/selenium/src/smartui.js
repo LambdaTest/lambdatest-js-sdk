@@ -1,23 +1,23 @@
 const utils = require('@lambdatest/sdk-utils');
 const pkgName = require('../package.json').name;
-const testType = 'testcafe-driver';
+const testType = 'js-selenium-driver';
 
-async function smartuiSnapshot(t, name, options = {}) {
-    if (!t) throw new Error("The test function's `t` argument is required.");
+async function smartuiSnapshot(driver, name, options = {}) {
+    if (!driver) throw new Error('An instance of the selenium driver object is required.');
     if (!name || typeof name !== 'string') throw new Error('The `name` argument is required.');
     if (!(await utils.isSmartUIRunning())) throw new Error('Cannot find SmartUI server.');
-  
+
     let log = utils.logger(pkgName);
     try {
-        const resp = await utils.fetchDOMSerializer();
-        await t.eval(new Function(resp.body.data.dom), { boundTestRun: t });
+        let resp = await utils.fetchDOMSerializer();
+        await driver.executeScript(resp.body.data.dom);
 
-        let { dom, url } = await t.eval((options) => ({
+        let { dom, url } = await driver.executeScript(options => ({
             dom: SmartUIDOM.serialize(options),
-            url: window.location.href || document.URL,
-        }), { boundTestRun: t, dependencies: {} });
+            url: document.URL
+        }), {});
 
-        let { body } = await utils.postSnapshot({ dom, url, name, options }, testType);
+        let { body } = await utils.postSnapshot({url, name, dom, options}, pkgName);
         if (body && body.data && body.data.warnings?.length !== 0) body.data.warnings.map(e => log.warn(e));
 
         log.info(`Snapshot captured: ${name}`);

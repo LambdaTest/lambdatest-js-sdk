@@ -1,23 +1,23 @@
 {
-  "name": "@lambdatest/puppeteer-driver",
+  "name": "@lambdatest/wdio-driver",
   "version": "1.0.4",
-  "description": "Puppeteer driver for all Lambdatest functionalities",
+  "description": "WebdriverIO driver for all Lambdatest functionalities",
   "main": "index.js",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/LambdaTest/lambdatest-js-sdk.git",
-    "directory": "packages/puppeteer"
+    "url": "git+https://github.com/LambdaTest/lambdatest-js-sdk",
+    "directory": "packages/webdriverio"
   },
   "bugs": {
     "url": "https://github.com/LambdaTest/lambdatest-js-sdk/issues"
   },
-  "homepage": "https://github.com/LambdaTest/lambdatest-js-sdk/packages/puppeteer#readme",
+  "homepage": "https://github.com/LambdaTest/lambdatest-js-sdk/packages/webdriverio#readme",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [
     "lambdatest",
-    "puppeteer"
+    "webdriverio"
   ],
   "author": "LambdaTest <keys@lambdatest.com>",
   "license": "MIT",
@@ -25,9 +25,9 @@
     "@lambdatest/sdk-utils": "workspace:^"
   },
   "devDependencies": {
-    "puppeteer": ">=1"
+    "webdriverio": ">=7"
   },
   "peerDependencies": {
-    "puppeteer": ">=1"
+    "webdriverio": ">=7"
   }
 }

@@ -1,29 +1,33 @@
 {
 	"name": "@lambdatest/playwright-driver",
-	"version": "1.0.3",
-	"description": "Playwright SDK for smart UI",
+	"version": "1.0.4",
+	"description": "Playwright driver for all Lambdatest functionalities",
 	"main": "index.js",
-	"scripts": {
-		"test": "echo \"Error: no test specified\" && exit 1"
-	},
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/LambdaTest/lambdatest-js-sdk.git",
 		"directory": "packages/playwright"
 	},
-	"keywords": [
-		"lambdatest",
-		"playwright",
-		"smartui"
-	],
-	"author": "LambdaTest <keys@lambdatest.com>",
-	"license": "MIT",
 	"bugs": {
 		"url": "https://github.com/LambdaTest/lambdatest-js-sdk/issues"
 	},
-	"homepage": "https://github.com/LambdaTest/lambdatest-js-sdk#readme",
+	"homepage": "https://github.com/LambdaTest/lambdatest-js-sdk/packages/playwright#readme",
+	"scripts": {
+		"test": "echo \"Error: no test specified\" && exit 1"
+	},
+	"keywords": [
+		"lambdatest",
+		"playwright"
+	],
+	"author": "LambdaTest <keys@lambdatest.com>",
+	"license": "MIT",
 	"dependencies": {
 		"@lambdatest/sdk-utils": "workspace:^"
+	},
+	"peerDependencies": {
+		"playwright-core": ">=1"
+	},
+	"devDependencies": {
+		"playwright-core": ">=1"
 	}
 }
-  
