@@ -1,0 +1,30 @@
+{
+  "name": "@lambdatest/cypress-driver",
+  "version": "1.0.4",
+  "description": "Cypress driver for all Lambdatest functionalities",
+  "main": "index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LambdaTest/lambdatest-js-sdk.git",
+    "directory": "packages/cypress"
+  },
+  "bugs": {
+    "url": "https://github.com/LambdaTest/lambdatest-js-sdk/issues"
+  },
+  "homepage": "https://github.com/LambdaTest/lambdatest-js-sdk/packages/cypress#readme",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "lambdatest",
+    "cypress"
+  ],
+  "author": "LambdaTest <keys@lambdatest.com>",
+  "license": "MIT",
+  "devDependencies": {
+    "cypress": "4.x"
+  },
+  "peerDependencies": {
+    "cypress": "4.x"
+  }
+}
