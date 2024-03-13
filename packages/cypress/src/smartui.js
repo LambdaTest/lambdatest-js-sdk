@@ -32,7 +32,7 @@ function smartuiSnapshot(name, options = {}) {
                 options
             }, testType).then(resp => {
                 if (resp.status >= 200 && resp.status < 300) {
-                    if (resp.body.data?.warnings?.length) {
+                    if (resp.body.data.warnings.length) {
                         resp.body.data.warnings.map(e => cy.task('log', log('warn', e)));
                     }
                     cylog('smartuiSnapshot', `Snapshot captured: ${name}`);
