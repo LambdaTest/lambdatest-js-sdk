@@ -1,6 +1,6 @@
 {
   "name": "@lambdatest/sdk-utils",
-  "version": "1.0.3",
+  "version": "1.0.5",
   "description": "LambdaTest driver utils",
   "main": "index.js",
   "repository": {
@@ -9,9 +9,9 @@
     "directory": "packages/sdk-utils"
   },
   "bugs": {
-		"url": "https://github.com/LambdaTest/lambdatest-js-sdk/issues"
-	},
-	"homepage": "https://github.com/LambdaTest/lambdatest-js-sdk/packages/sdk-utils#readme",
+    "url": "https://github.com/LambdaTest/lambdatest-js-sdk/issues"
+  },
+  "homepage": "https://github.com/LambdaTest/lambdatest-js-sdk/packages/sdk-utils#readme",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
