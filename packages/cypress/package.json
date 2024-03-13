@@ -1,6 +1,6 @@
 {
   "name": "@lambdatest/cypress-driver",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Cypress driver for all Lambdatest functionalities",
   "main": "index.js",
   "repository": {
@@ -22,9 +22,9 @@
   "author": "LambdaTest <keys@lambdatest.com>",
   "license": "MIT",
   "devDependencies": {
-    "cypress": "4.x"
+    "cypress": ">=10"
   },
   "peerDependencies": {
-    "cypress": "4.x"
+    "cypress": ">=10"
   }
 }
