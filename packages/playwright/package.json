@@ -3,6 +3,7 @@
 	"version": "1.0.6",
 	"description": "Playwright driver for all Lambdatest functionalities",
 	"main": "index.js",
+	"types": "index.d.ts",
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/LambdaTest/lambdatest-js-sdk.git",
