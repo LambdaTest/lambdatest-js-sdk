@@ -3,7 +3,7 @@
   "version": "1.0.6",
   "description": "LambdaTest driver utils",
   "main": "index.js",
-  "types": "index.d.ts",
+  "types": "types/index.d.ts",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/LambdaTest/lambdatest-js-sdk",

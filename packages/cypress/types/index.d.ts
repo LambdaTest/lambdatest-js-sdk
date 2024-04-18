@@ -8,7 +8,7 @@ declare global {
              * @param name The name of the snapshot.
              * @param options Additional options for snapshot capture.
              */
-            smartuiSnapshot(name?: string, options?: object): Chainable<void>;
+            smartuiSnapshot(name?: string, options?: object): Chainable<Subject>;
         }
     }
 }
