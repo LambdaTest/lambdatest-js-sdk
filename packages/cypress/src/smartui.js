@@ -14,12 +14,11 @@ function smartuiSnapshot(name, options = {}) {
                 snapshot: name,
             });
         }
-
-        if (!(await client.isSmartUIRunning())) {
-            throw new Error('Cannot find SmartUI server.');
-        }
     
-        let resp = await client.fetchDOMSerializer();
+        let resp = await client.isSmartUIRunning()
+        if (!resp.body.cliVersion) throw new Error(`cannot find SmartUI server; ${JSON.stringify(resp)}`);
+
+        resp = await client.fetchDOMSerializer();
         eval(resp.body.data.dom);
     
         return cy.document({ log: false }).then({ timeout: CY_TIMEOUT }, dom => {
