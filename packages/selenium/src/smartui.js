@@ -7,6 +7,14 @@ async function smartuiSnapshot(driver, name, options = {}) {
     if (!name || typeof name !== 'string') throw new Error('The `name` argument is required.');
     if (!(await utils.isSmartUIRunning())) throw new Error('Cannot find SmartUI server.');
 
+    // Append sessionId to options
+    try {
+        const sessionId = await driver.getSession().then(session => session.getId());
+        options.sessionId = sessionId;
+    } catch (error) {
+        console.log("Unable to append sessionId in snapshot options")
+    }
+
     let log = utils.logger(pkgName);
     try {
         let resp = await utils.fetchDOMSerializer();
