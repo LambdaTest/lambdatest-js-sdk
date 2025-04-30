@@ -24,7 +24,7 @@
 	"author": "LambdaTest <keys@lambdatest.com>",
 	"license": "MIT",
 	"dependencies": {
-		"@lambdatest/sdk-utils": "^1.0.7"
+		"@lambdatest/sdk-utils": "workspace:^"
 	},
 	"peerDependencies": {
 		"playwright-core": ">=1"
