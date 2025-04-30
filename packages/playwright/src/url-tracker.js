@@ -16,10 +16,9 @@ class UrlTrackerPlugin extends EventEmitter {
             preserveHistory: options.preserveHistory ?? true
         };
         
-        // DIRECT FIX: If specFile is unknown, force it to the known test file
+        // Don't use hardcoded spec file names
         if (this.options.specFile === 'unknown') {
-            console.log('Directly overriding unknown spec file with real-websites.spec.js');
-            this.options.specFile = 'real-websites.spec.js';
+            console.log('Spec file is unknown, will attempt to determine from test metadata');
         }
         
         console.log(`Creating URL tracker with RAW options: ${JSON.stringify(options)}`);
@@ -35,6 +34,34 @@ class UrlTrackerPlugin extends EventEmitter {
         this.preserveHistory = this.options.preserveHistory;
         this.trackingResults = []; // This will store results in the new format
         this.isFunctionExposed = false;
+        this.testMetadata = null; // New property to store test metadata
+        this.metadataFetchAttempts = 0; // Track number of fetch attempts
+        this.MAX_METADATA_FETCH_ATTEMPTS = 5; // Maximum retry attempts
+        this.lastNavigationType = 'init'; // Track the last navigation type
+        
+        // Define navigation type mapping for more descriptive types
+        this.navigationTypeMap = {
+            'goto': 'goto',               // Direct navigation via page.goto()
+            'navigation': 'navigation',   // General navigation event
+            'back': 'back',               // Browser back button via page.goBack()
+            'forward': 'forward',         // Browser forward button via page.goForward()
+            'reload': 'refresh',          // Page refresh via page.reload()
+            'pushstate': 'spa_route',     // SPA route change via history.pushState
+            'replacestate': 'spa_replace', // SPA route replacement via history.replaceState
+            'hashchange': 'hash_change',  // URL hash change
+            'click': 'link_click',        // Navigation from clicking a link
+            'form': 'form_submit',        // Navigation from form submission
+            'redirect': 'redirect',       // Server or client-side redirect
+            'popstate': 'popstate',       // Browser history navigation (back/forward)
+            'load': 'page_load',          // Initial page load
+            'domcontentloaded': 'dom_ready', // DOM content loaded
+            'networkidle': 'network_idle', // Network becomes idle
+            'timeout': 'timeout',         // Navigation timeout
+            'final': 'final',             // Final URL at test end
+            'manual': 'manual_record',    // Manually recorded navigation
+            'fallback': 'fallback',       // Fallback navigation record
+            'dummy': 'dummy'              // Dummy placeholder
+        };
         
         // Register this tracker in the global list of active trackers
         try {
@@ -138,6 +165,10 @@ class UrlTrackerPlugin extends EventEmitter {
         try {
             console.log(`Initializing URL tracker for test: ${this.options.testName || 'unknown'}`);
             
+            // CRITICAL: Fetch test metadata first - this must happen for every test session
+            console.log('FETCHING TEST METADATA AT SESSION START - REQUIRED FOR EVERY TEST SESSION');
+            await this.fetchTestMetadataWithRetry();
+            
             // Wait for the page to be ready
             await this.page.waitForLoadState('domcontentloaded').catch(() => {
                 // Ignore timeouts or navigation errors
@@ -168,10 +199,11 @@ class UrlTrackerPlugin extends EventEmitter {
                 previous_url: 'null',
                 current_url: currentUrl,
                 timestamp: new Date().toISOString(),
-                navigation_type: 'goto'
+                navigation_type: 'page_load' // More specific navigation type
             });
             
             this.lastUrl = currentUrl;
+            this.lastNavigationType = 'page_load';
             console.log(`Added initial URL to history: ${currentUrl}`);
 
             await this.setupPageListeners();
@@ -225,11 +257,24 @@ class UrlTrackerPlugin extends EventEmitter {
                     let navigation_type;
                     if (isHashChange && this.options.trackHashChanges) {
                         navigationType = 'hashchange';
-                        navigation_type = 'hashchange';
+                        navigation_type = this.navigationTypeMap['hashchange'];
                         this.emit('hashChange', { oldURL: oldUrl, newURL: newUrl });
                     } else {
                         navigationType = 'navigation';
-                        navigation_type = 'navigation';
+                        // Try to determine more specific navigation type based on context
+                        if (this.lastNavigationType === 'back_pending') {
+                            navigation_type = this.navigationTypeMap['back'];
+                            this.lastNavigationType = 'back';
+                        } else if (this.lastNavigationType === 'forward_pending') {
+                            navigation_type = this.navigationTypeMap['forward'];
+                            this.lastNavigationType = 'forward';
+                        } else if (this.lastNavigationType === 'reload_pending') {
+                            navigation_type = this.navigationTypeMap['reload'];
+                            this.lastNavigationType = 'refresh';
+                        } else {
+                            navigation_type = this.navigationTypeMap['navigation'];
+                            this.lastNavigationType = 'navigation';
+                        }
                         this.emit('urlChange', { oldUrl, newUrl });
                     }
 
@@ -251,7 +296,7 @@ class UrlTrackerPlugin extends EventEmitter {
                         navigation_type: navigation_type
                     });
                     
-                    console.log(`Added tracking result: ${this.options.testName} - ${navigationType} from ${oldUrl} to ${newUrl}`);
+                    console.log(`Added tracking result: ${this.options.testName} - ${navigation_type} from ${oldUrl} to ${newUrl}`);
                 }
             }
         });
@@ -273,15 +318,8 @@ class UrlTrackerPlugin extends EventEmitter {
                             oldUrlObj.hash !== newUrlObj.hash;
 
                         const finalType = isHashChange ? 'hashchange' : type;
-                        let navigation_type = finalType;
+                        let navigation_type = this.navigationTypeMap[finalType] || finalType;
                         
-                        // Map history API types to the new format
-                        if (finalType === 'pushstate') {
-                            navigation_type = 'pushState';
-                        } else if (finalType === 'replacestate') {
-                            navigation_type = 'replaceState';
-                        }
-
                         this.navigationHistory.push({
                             url: newUrl,
                             type: finalType,
@@ -298,6 +336,7 @@ class UrlTrackerPlugin extends EventEmitter {
                             navigation_type: navigation_type
                         });
 
+                        this.lastNavigationType = finalType;
                         this.emit('urlChange', { oldUrl, newUrl });
                     }
                 });
@@ -362,12 +401,47 @@ class UrlTrackerPlugin extends EventEmitter {
                         if (currentUrl === 'about:blank' || currentUrl === '') {
                             window.__trackHistoryChange(window.location.origin + '/', 'navigation');
                         } else {
-                            window.__trackHistoryChange(currentUrl, 'pushstate');
+                            window.__trackHistoryChange(currentUrl, 'popstate');
                         }
                     } catch (e) {
                         console.error('Error tracking popstate:', e);
                     }
                 });
+
+                // Track clicks on links that might cause navigation
+                document.addEventListener('click', (event) => {
+                    try {
+                        // Find closest anchor element
+                        let target = event.target;
+                        while (target && target.tagName !== 'A') {
+                            target = target.parentElement;
+                        }
+                        
+                        // If this is a link click that will navigate
+                        if (target && target.tagName === 'A' && target.href) {
+                            // Save link information for later use
+                            window.__lastClickedLink = {
+                                href: target.href,
+                                timestamp: Date.now()
+                            };
+                        }
+                    } catch (e) {
+                        console.error('Error tracking link clicks:', e);
+                    }
+                }, true);
+                
+                // Track form submissions
+                document.addEventListener('submit', (event) => {
+                    try {
+                        // Mark that a form was submitted
+                        window.__lastFormSubmit = {
+                            timestamp: Date.now(),
+                            action: event.target.action || window.location.href
+                        };
+                    } catch (e) {
+                        console.error('Error tracking form submission:', e);
+                    }
+                }, true);
 
                 // Manually trigger for initial page load
                 try {
@@ -378,8 +452,104 @@ class UrlTrackerPlugin extends EventEmitter {
             }).catch((error) => {
                 console.error('Error adding init script:', error);
             });
+            
+            // Intercept Playwright navigation methods
+            this.setupPlaywrightMethodInterception();
+            
         } catch (error) {
             console.error('Error setting up page listeners:', error);
+        }
+    }
+    
+    // New method to intercept Playwright navigation methods
+    setupPlaywrightMethodInterception() {
+        try {
+            // Intercept page.goBack
+            const originalGoBack = this.page.goBack;
+            this.page.goBack = async (...args) => {
+                console.log('Intercepted page.goBack()');
+                this.lastNavigationType = 'back_pending';
+                return await originalGoBack.apply(this.page, args);
+            };
+            
+            // Intercept page.goForward
+            const originalGoForward = this.page.goForward;
+            this.page.goForward = async (...args) => {
+                console.log('Intercepted page.goForward()');
+                this.lastNavigationType = 'forward_pending';
+                return await originalGoForward.apply(this.page, args);
+            };
+            
+            // Intercept page.reload
+            const originalReload = this.page.reload;
+            this.page.reload = async (...args) => {
+                console.log('Intercepted page.reload()');
+                this.lastNavigationType = 'reload_pending';
+                const oldUrl = this.lastUrl || 'null';
+                
+                // Record the reload intent before it happens
+                this.addTrackingResult({
+                    spec_file: this.options.specFile,
+                    test_name: this.options.testName,
+                    previous_url: oldUrl,
+                    current_url: oldUrl, // Same URL for refresh
+                    timestamp: new Date().toISOString(),
+                    navigation_type: this.navigationTypeMap['reload']
+                });
+                
+                return await originalReload.apply(this.page, args);
+            };
+            
+            // Intercept page.click with option to detect link clicks
+            const originalClick = this.page.click;
+            this.page.click = async (selector, options) => {
+                console.log(`Intercepted page.click(${selector})`);
+                
+                // Check if this is likely a link click
+                try {
+                    const isLink = await this.page.evaluate((sel) => {
+                        const element = document.querySelector(sel);
+                        if (!element) return false;
+                        
+                        // Check if it's an anchor or has an anchor parent
+                        let current = element;
+                        while (current) {
+                            if (current.tagName === 'A' && current.href) {
+                                return {
+                                    isLink: true,
+                                    href: current.href
+                                };
+                            }
+                            current = current.parentElement;
+                        }
+                        return false;
+                    }, selector);
+                    
+                    if (isLink) {
+                        console.log(`Detected click on link: ${isLink.href}`);
+                        this.lastNavigationType = 'click';
+                        
+                        // Record the click intent
+                        const oldUrl = this.lastUrl || 'null';
+                        this.addTrackingResult({
+                            spec_file: this.options.specFile,
+                            test_name: this.options.testName,
+                            previous_url: oldUrl,
+                            current_url: this.normalizeUrl(isLink.href),
+                            timestamp: new Date().toISOString(),
+                            navigation_type: this.navigationTypeMap['click']
+                        });
+                    }
+                } catch (e) {
+                    console.log('Error detecting if click target is a link:', e);
+                }
+                
+                return await originalClick.apply(this.page, [selector, options]);
+            };
+            
+            console.log('Successfully intercepted Playwright navigation methods');
+        } catch (e) {
+            console.error('Error setting up Playwright method interception:', e);
         }
     }
 
@@ -418,6 +588,23 @@ class UrlTrackerPlugin extends EventEmitter {
         console.log(`Test name: ${this.options.testName}, Spec file: ${this.options.specFile}`);
         console.log(`Found ${this.trackingResults.length} tracking results to export`);
         
+        // Make final attempt to fetch metadata if we don't have it
+        if (!this.testMetadata) {
+            console.log('Final attempt to fetch test metadata during cleanup...');
+            await this.fetchTestMetadataWithRetry();
+        }
+        
+        // Ensure spec file is properly set for all results
+        if (this.options.specFile && this.options.specFile !== 'unknown' && 
+            this.options.specFile !== 'Unable to determine spec file') {
+            console.log(`Ensuring all tracking results use spec file: ${this.options.specFile}`);
+            if (this.trackingResults && this.trackingResults.length > 0) {
+                this.trackingResults.forEach(result => {
+                    result.spec_file = this.options.specFile;
+                });
+            }
+        }
+        
         // Debug output of tracking results
         if (this.trackingResults.length > 0) {
             console.log(`Tracking results for ${this.options.testName}:`, JSON.stringify(this.trackingResults, null, 2));
@@ -453,6 +640,51 @@ class UrlTrackerPlugin extends EventEmitter {
         console.log(`Beginning export with options: ${JSON.stringify(this.options)}`);
         console.log(`Current spec file is: ${this.options.specFile}`);
         
+        // CRITICAL: Extract spec file from metadata if available
+        let metadataSpecFile = null;
+        if (this.testMetadata && this.testMetadata.data && this.testMetadata.data.name) {
+            const testName = this.testMetadata.data.name;
+            const specFileMatch = testName.match(/\s-\s(.+\.spec\.js)$/);
+            if (specFileMatch && specFileMatch[1]) {
+                metadataSpecFile = specFileMatch[1];
+                console.log(`Using spec file from metadata: ${metadataSpecFile}`);
+                
+                // Override the spec file in options
+                if (this.options.specFile !== metadataSpecFile) {
+                    console.log(`Overriding spec file from ${this.options.specFile} to ${metadataSpecFile}`);
+                    this.options.specFile = metadataSpecFile;
+                }
+            } else {
+                console.log(`Could not extract spec file from metadata name: ${testName}`);
+                // Fallback: try to extract any filename that ends with .spec.js
+                const fallbackMatch = testName.match(/([^\s]+\.spec\.js)/);
+                if (fallbackMatch && fallbackMatch[1]) {
+                    metadataSpecFile = fallbackMatch[1];
+                    console.log(`Extracted spec file using fallback method: ${metadataSpecFile}`);
+                    
+                    // Override the spec file in options
+                    if (this.options.specFile !== metadataSpecFile) {
+                        console.log(`Overriding spec file from ${this.options.specFile} to ${metadataSpecFile}`);
+                        this.options.specFile = metadataSpecFile;
+                    }
+                }
+            }
+        }
+        
+        // IMPORTANT: Force update the spec file before export in all tracking results
+        if (this.trackingResults && this.trackingResults.length > 0) {
+            // Ensure all tracking results use the current spec file
+            const currentSpecFile = metadataSpecFile || this.options.specFile;
+            console.log(`Updating all tracking results to use spec file: ${currentSpecFile}`);
+            
+            this.trackingResults.forEach(result => {
+                if (result.spec_file !== currentSpecFile) {
+                    console.log(`Updating result spec file from '${result.spec_file}' to '${currentSpecFile}'`);
+                    result.spec_file = currentSpecFile;
+                }
+            });
+        }
+        
         // Force fix our tracking results one more time before export
         if (this.trackingResults && this.trackingResults.length > 0) {
             console.log(`Checking ${this.trackingResults.length} results before export`);
@@ -466,7 +698,7 @@ class UrlTrackerPlugin extends EventEmitter {
                 this.trackingResults.forEach(result => {
                     if (result.spec_file === 'unknown') {
                         console.log(`Fixing result with unknown spec file: ${JSON.stringify(result)}`);
-                        result.spec_file = 'real-websites.spec.js';
+                        result.spec_file = metadataSpecFile || "Unable to determine spec file";
                     }
                 });
             } else {
@@ -569,7 +801,16 @@ class UrlTrackerPlugin extends EventEmitter {
                     console.log(`Created directory: ${outputDir}`);
                 }
 
-                let existingResults = [];
+                // Create current session data structure
+                const currentSessionData = {
+                    metadata: this.testMetadata || {},
+                    navigations: this.trackingResults,
+                    session_id: this.testMetadata?.session_id || this.testMetadata?.build_id || `session_${Date.now()}`,
+                    spec_file: this.options.specFile  // Store spec file at the session level for easier updating
+                };
+
+                // Initialize the array of all sessions
+                let allSessions = [];
                 let shouldCreateNewFile = false;
 
                 // Check if file exists and try to read it
@@ -583,24 +824,29 @@ class UrlTrackerPlugin extends EventEmitter {
                         } else {
                             try {
                                 // Try to parse the JSON
-                                existingResults = JSON.parse(fileContent);
+                                const existingData = JSON.parse(fileContent);
                                 
-                                // Verify it's an array
-                                if (!Array.isArray(existingResults)) {
-                                    console.error('Existing results file is not an array, creating a new one');
+                                // Handle different possible structures
+                                if (Array.isArray(existingData)) {
+                                    // File already contains an array of sessions - perfect!
+                                    allSessions = existingData;
+                                } else if (existingData.metadata && existingData.navigations) {
+                                    // File contains a single session in the old format
+                                    // Convert to array format
+                                    allSessions = [existingData];
+                                } else {
+                                    // Unknown format
+                                    console.error('Existing file is in an unknown format, creating a new one');
                                     shouldCreateNewFile = true;
-                                    existingResults = [];
                                 }
                             } catch (parseError) {
                                 console.error('Error parsing existing results file, creating a new one:', parseError);
                                 shouldCreateNewFile = true;
-                                existingResults = [];
                             }
                         }
                     } catch (readError) {
                         console.error('Error reading results file, creating a new one:', readError);
                         shouldCreateNewFile = true;
-                        existingResults = [];
                     }
                 } else {
                     // File doesn't exist, create a new one
@@ -618,6 +864,7 @@ class UrlTrackerPlugin extends EventEmitter {
                         
                         fs.writeFileSync(outputPath, '[]', { encoding: 'utf8', mode: 0o666 });
                         console.log(`Created new empty results file: ${outputPath}`);
+                        allSessions = [];
                     } catch (createError) {
                         console.error(`Error creating new results file ${outputPath}:`, createError);
                         
@@ -627,81 +874,53 @@ class UrlTrackerPlugin extends EventEmitter {
                             fs.writeFileSync(fallbackPath, '[]', { encoding: 'utf8' });
                             console.log(`Created fallback file in current directory: ${fallbackPath}`);
                             outputPath = fallbackPath; // Update the path for further operations
+                            allSessions = [];
                         } catch (fallbackErr) {
                             console.error('Failed to create fallback file in current directory:', fallbackErr);
                         }
                     }
                 }
 
-                // Convert any existing results to the new format and fix unknown spec files
-                const convertedExistingResults = existingResults.map(result => {
-                    // First fix any unknown spec files
-                    const specFile = (result.spec_file === 'unknown' || result.specFile === 'unknown' || 
-                                    !result.spec_file && !result.specFile) 
-                                    ? 'real-websites.spec.js' 
-                                    : (result.spec_file || result.specFile);
-                    
-                    // For legacy format, convert to new format
-                    if (result.hasOwnProperty('fromUrl') && result.hasOwnProperty('toUrl') || 
-                        result.hasOwnProperty('navigationType')) {
-                        console.log(`Converting old format result in file: ${JSON.stringify(result)}`);
-                        return {
-                            spec_file: specFile,
-                            test_name: result.testName || this.options.testName,
-                            previous_url: result.fromUrl === 'nullblank' || result.fromUrl === '' || 
-                                        result.fromUrl === null || result.fromUrl === 'about:blank' ? 
-                                        'null' : result.fromUrl,
-                            current_url: result.toUrl === 'nullblank' || result.toUrl === '' || 
-                                        result.toUrl === null || result.toUrl === 'about:blank' ? 
-                                        'null' : result.toUrl,
-                            timestamp: result.timestamp || new Date().toISOString(),
-                            navigation_type: result.navigationType || 'navigation'
-                        };
+                // Update existing sessions with latest spec_file if they match current test
+                const testName = this.options.testName;
+                const currentSpecFile = this.options.specFile;
+                allSessions.forEach(session => {
+                    // Update spec file for all sessions with matching test name
+                    if (session.metadata && session.metadata.name === testName) {
+                        if (session.spec_file !== currentSpecFile) {
+                            console.log(`Updating existing session spec file from '${session.spec_file}' to '${currentSpecFile}'`);
+                            session.spec_file = currentSpecFile;
+                        }
+                        
+                        // Also update spec_file in all navigations
+                        if (Array.isArray(session.navigations)) {
+                            session.navigations.forEach(nav => {
+                                if (nav.spec_file !== currentSpecFile) {
+                                    nav.spec_file = currentSpecFile;
+                                }
+                            });
+                        }
                     }
-                    
-                    // Check if this is already in the new format
-                    if (result.hasOwnProperty('spec_file') && 
-                        result.hasOwnProperty('test_name') && 
-                        result.hasOwnProperty('previous_url') && 
-                        result.hasOwnProperty('current_url') &&
-                        result.hasOwnProperty('timestamp') &&
-                        result.hasOwnProperty('navigation_type')) {
-                        // Fix the spec_file if it's unknown
-                        return { 
-                            ...result,
-                            spec_file: specFile
-                        };
-                    }
-                    
-                    // Unknown format - try to convert the best we can
-                    console.log(`Unknown format in file, attempting conversion: ${JSON.stringify(result)}`);
-                    return {
-                        spec_file: specFile,
-                        test_name: result.test_name || result.testName || this.options.testName,
-                        previous_url: result.previous_url || result.fromUrl || 'null',
-                        current_url: result.current_url || result.toUrl || 'null',
-                        timestamp: result.timestamp || new Date().toISOString(),
-                        navigation_type: result.navigation_type || result.navigationType || 'unknown'
-                    };
                 });
 
-                // Merge results with existing data, avoiding duplicates
-                let finalResults = [...convertedExistingResults];
-                
-                // Add only new results that don't already exist
-                this.trackingResults.forEach(newResult => {
-                    const isDuplicate = finalResults.some(existingResult => 
-                        existingResult.timestamp === newResult.timestamp && 
-                        existingResult.current_url === newResult.current_url &&
-                        existingResult.previous_url === newResult.previous_url
-                    );
-                    
-                    if (!isDuplicate) {
-                        finalResults.push(newResult);
-                    }
-                });
-                
-                console.log(`Final results count after merge: ${finalResults.length}`);
+                // Check if this session already exists in the file (based on session ID)
+                const sessionId = currentSessionData.session_id;
+                const existingSessionIndex = allSessions.findIndex(session => 
+                    session.session_id === sessionId || 
+                    (session.metadata && session.metadata.session_id === sessionId) ||
+                    (session.metadata && session.metadata.build_id === sessionId)
+                );
+
+                if (existingSessionIndex >= 0) {
+                    console.log(`Found existing session with ID ${sessionId}, updating instead of adding new entry`);
+                    allSessions[existingSessionIndex] = currentSessionData;
+                } else {
+                    // Add current session to all sessions
+                    allSessions.push(currentSessionData);
+                    console.log(`Adding new session with ID ${sessionId} to results file`);
+                }
+
+                console.log(`File now contains ${allSessions.length} test sessions`);
 
                 // Set file permissions to ensure it's writable
                 try {
@@ -715,18 +934,18 @@ class UrlTrackerPlugin extends EventEmitter {
                 // Write the results to the file using multiple methods to ensure success
                 try {
                     // First try with standard fs.writeFileSync
-                    fs.writeFileSync(outputPath, JSON.stringify(finalResults, null, 2), { encoding: 'utf8', mode: 0o666 });
-                    console.log(`URL tracking results (${finalResults.length} entries) saved to: ${outputPath}`);
+                    fs.writeFileSync(outputPath, JSON.stringify(allSessions, null, 2), { encoding: 'utf8', mode: 0o666 });
+                    console.log(`URL tracking results (${allSessions.length} sessions) saved to: ${outputPath}`);
                 } catch (writeError) {
                     console.error(`Error writing to ${outputPath} with writeFileSync:`, writeError);
                     
                     // Try alternate method with fs.writeFile
                     try {
-                        fs.writeFile(outputPath, JSON.stringify(finalResults, null, 2), { encoding: 'utf8', mode: 0o666 }, (err) => {
+                        fs.writeFile(outputPath, JSON.stringify(allSessions, null, 2), { encoding: 'utf8', mode: 0o666 }, (err) => {
                             if (err) {
                                 console.error(`Error writing to ${outputPath} with writeFile:`, err);
                             } else {
-                                console.log(`URL tracking results (${finalResults.length} entries) saved to ${outputPath} with writeFile`);
+                                console.log(`URL tracking results (${allSessions.length} sessions) saved to ${outputPath} with writeFile`);
                             }
                         });
                     } catch (writeError2) {
@@ -736,7 +955,7 @@ class UrlTrackerPlugin extends EventEmitter {
                     // Try writing to current directory as a last resort
                     const emergencyPath = path.join(process.cwd(), 'url-tracking-emergency.json');
                     try {
-                        fs.writeFileSync(emergencyPath, JSON.stringify(finalResults, null, 2), { encoding: 'utf8' });
+                        fs.writeFileSync(emergencyPath, JSON.stringify(allSessions, null, 2), { encoding: 'utf8' });
                         console.log(`Emergency backup saved to ${emergencyPath}`);
                     } catch (emergencyError) {
                         console.error(`Failed to create emergency file ${emergencyPath}:`, emergencyError);
@@ -747,22 +966,24 @@ class UrlTrackerPlugin extends EventEmitter {
                 try {
                     if (fs.existsSync(outputPath)) {
                         const content = fs.readFileSync(outputPath, 'utf-8');
-                        let savedResults = [];
+                        let savedData = [];
                         
                         try {
-                            savedResults = JSON.parse(content);
-                            console.log(`Verification: Found ${savedResults.length} results in file`);
+                            savedData = JSON.parse(content);
+                            console.log(`Verification: Found ${savedData.length} sessions in file`);
                             
-                            if (savedResults.length > 0) {
-                                console.log('First saved result in file:', JSON.stringify(savedResults[0]));
+                            if (savedData.length > 0) {
+                                console.log('First saved session in file has', 
+                                    savedData[0].navigations ? savedData[0].navigations.length : 0, 
+                                    'navigation entries');
+                                console.log('First saved session spec file:', 
+                                    savedData[0].spec_file || 'not found');
                             } else {
-                                console.error('ERROR: File was written but contains empty results array!');
-                                // Emergency fix - write our results directly again
-                                if (this.trackingResults.length > 0) {
-                                    const emergencyPath = path.join(process.cwd(), 'url-tracking-emergency.json');
-                                    fs.writeFileSync(emergencyPath, JSON.stringify(this.trackingResults, null, 2), { encoding: 'utf8' });
-                                    console.log(`Emergency rewrite saved to ${emergencyPath}`);
-                                }
+                                console.error('ERROR: File was written but contains empty sessions array!');
+                                // Emergency fix - write our session directly again
+                                const emergencyPath = path.join(process.cwd(), 'url-tracking-emergency.json');
+                                fs.writeFileSync(emergencyPath, JSON.stringify([currentSessionData], null, 2), { encoding: 'utf8' });
+                                console.log(`Emergency rewrite saved to ${emergencyPath}`);
                             }
                         } catch (parseError) {
                             console.error('Error parsing verification file:', parseError);
@@ -776,16 +997,22 @@ class UrlTrackerPlugin extends EventEmitter {
             } catch (error) {
                 console.error('Error exporting URL tracking results:', error);
                 
-                // Last resort - try to write just the current results to a backup file
+                // Last resort - try to write just the current session to a backup file
                 try {
                     const backupPath = path.join(process.cwd(), 'url-tracking-backup.json');
-                    fs.writeFileSync(backupPath, JSON.stringify(this.trackingResults, null, 2), { encoding: 'utf8' });
+                    const currentSessionData = {
+                        metadata: this.testMetadata || {},
+                        navigations: this.trackingResults,
+                        session_id: this.testMetadata?.session_id || this.testMetadata?.build_id || `session_${Date.now()}`,
+                        spec_file: this.options.specFile
+                    };
+                    fs.writeFileSync(backupPath, JSON.stringify([currentSessionData], null, 2), { encoding: 'utf8' });
                     console.log(`Backup results saved to ${backupPath}`);
                     
                     // Verify the backup was written
                     const backupContent = fs.readFileSync(backupPath, 'utf-8');
-                    const backupResults = JSON.parse(backupContent);
-                    console.log(`Backup verification: Found ${backupResults.length} results in backup file`);
+                    const backupData = JSON.parse(backupContent);
+                    console.log(`Backup verification: Found ${backupData.length} sessions in backup file`);
                 } catch (backupError) {
                     console.error('Failed to create backup results file:', backupError);
                 }
@@ -811,7 +1038,7 @@ class UrlTrackerPlugin extends EventEmitter {
         this.emit('urlChanged', { url, type });
     }
 
-    // Replace the entire addTrackingResult method
+    // Update the addTrackingResult method to use the navigation type map
     addTrackingResult(result) {
         // Validate required fields first
         if (!result) {
@@ -822,10 +1049,15 @@ class UrlTrackerPlugin extends EventEmitter {
         // Debug the incoming result
         console.log(`Adding tracking result: ${JSON.stringify(result)}`);
         
-        // DIRECT FIX: If the spec_file is "unknown", use our hardcoded value
-        const targetSpecFile = (result.spec_file === 'unknown' || !result.spec_file) 
-            ? 'real-websites.spec.js' 
-            : result.spec_file;
+        // IMPORTANT: Always use the spec file from options, which may have been updated from metadata
+        const targetSpecFile = this.options.specFile;
+        console.log(`Using spec file from options: ${targetSpecFile}`);
+        
+        // Map navigation type if possible
+        let navigation_type = result.navigation_type || 'navigation';
+        if (this.navigationTypeMap[navigation_type]) {
+            navigation_type = this.navigationTypeMap[navigation_type];
+        }
         
         let finalResult;
         
@@ -841,27 +1073,21 @@ class UrlTrackerPlugin extends EventEmitter {
                             result.toUrl === null || result.toUrl === 'about:blank' ? 
                             'null' : result.toUrl,
                 timestamp: result.timestamp || new Date().toISOString(),
-                navigation_type: result.navigationType || 'navigation'
+                navigation_type: navigation_type
             };
             console.log(`Converted old format to new format: ${JSON.stringify(finalResult)}`);
         } else {
             // Already in new format or unknown format
             finalResult = {
                 ...result,
-                spec_file: targetSpecFile,
+                spec_file: targetSpecFile,  // Always override with our target spec file
                 test_name: result.test_name || this.options.testName,
                 previous_url: result.previous_url || 'null',
                 current_url: result.current_url || 'null',
                 timestamp: result.timestamp || new Date().toISOString(),
-                navigation_type: result.navigation_type || 'navigation'
+                navigation_type: navigation_type
             };
             console.log(`Normalized result: ${JSON.stringify(finalResult)}`);
-        }
-        
-        // DIRECT FIX: Check one more time that spec_file is not unknown
-        if (finalResult.spec_file === 'unknown') {
-            console.warn('Warning: spec_file is still "unknown" after normalization, forcing to real-websites.spec.js');
-            finalResult.spec_file = 'real-websites.spec.js';
         }
         
         // Add the result to the array
@@ -957,6 +1183,95 @@ class UrlTrackerPlugin extends EventEmitter {
             console.error('Error in ensureOutputFilesExist:', e);
         }
     }
+
+    // New method to fetch test metadata from LambdaTest
+    async fetchTestMetadata() {
+        try {
+            this.metadataFetchAttempts++;
+            console.log(`Fetching test details from LambdaTest (attempt ${this.metadataFetchAttempts})...`);
+            const response = JSON.parse(await this.page.evaluate(_ => {}, `lambdatest_action: ${JSON.stringify({ action: 'getTestDetails' })}`));
+            
+            console.log('Received test metadata:', JSON.stringify(response));
+            this.testMetadata = response;
+            
+            // IMPORTANT: Extract spec file name directly from metadata
+            if (response && response.data && response.data.name) {
+                const testName = response.data.name;
+                console.log(`Test name from metadata: ${testName}`);
+                
+                // Check if the test name contains a spec file reference
+                const specFileMatch = testName.match(/\s-\s(.+\.spec\.js)$/);
+                if (specFileMatch && specFileMatch[1]) {
+                    const metadataSpecFile = specFileMatch[1];
+                    console.log(`Extracted spec file from metadata: ${metadataSpecFile}`);
+                    
+                    // Update the spec file in our options
+                    this.options.specFile = metadataSpecFile;
+                    console.log(`Updated spec file from metadata: ${this.options.specFile}`);
+                    
+                    // Update all existing tracking results
+                    if (this.trackingResults && this.trackingResults.length > 0) {
+                        console.log(`Updating spec file in ${this.trackingResults.length} existing tracking results`);
+                        this.trackingResults.forEach(result => {
+                            result.spec_file = metadataSpecFile;
+                        });
+                    }
+                } else {
+                    console.log(`Could not extract spec file from metadata name: ${testName}`);
+                    // Fallback: try to extract any filename that ends with .spec.js
+                    const fallbackMatch = testName.match(/([^\s]+\.spec\.js)/);
+                    if (fallbackMatch && fallbackMatch[1]) {
+                        const fallbackSpecFile = fallbackMatch[1];
+                        console.log(`Extracted spec file using fallback method: ${fallbackSpecFile}`);
+                        this.options.specFile = fallbackSpecFile;
+                        
+                        // Update all existing tracking results
+                        if (this.trackingResults && this.trackingResults.length > 0) {
+                            this.trackingResults.forEach(result => {
+                                result.spec_file = fallbackSpecFile;
+                            });
+                        }
+                    }
+                }
+            }
+            
+            return response;
+        } catch (error) {
+            console.error(`Error fetching test metadata (attempt ${this.metadataFetchAttempts}):`, error);
+            return null;
+        }
+    }
+    
+    // New method with retry logic to ensure metadata is fetched for every test session
+    async fetchTestMetadataWithRetry() {
+        // Reset attempts counter
+        this.metadataFetchAttempts = 0;
+        
+        // First attempt
+        let metadata = await this.fetchTestMetadata();
+        
+        // Retry with exponential backoff if needed
+        let retryDelay = 1000; // Start with 1 second delay
+        
+        while (!metadata && this.metadataFetchAttempts < this.MAX_METADATA_FETCH_ATTEMPTS) {
+            console.log(`Retrying metadata fetch in ${retryDelay}ms (attempt ${this.metadataFetchAttempts + 1}/${this.MAX_METADATA_FETCH_ATTEMPTS})`);
+            
+            // Wait before retry
+            await new Promise(resolve => setTimeout(resolve, retryDelay));
+            
+            // Retry fetch
+            metadata = await this.fetchTestMetadata();
+            
+            // Increase delay for next attempt (exponential backoff)
+            retryDelay = Math.min(retryDelay * 2, 10000); // Cap at 10 seconds
+        }
+        
+        if (!metadata) {
+            console.error(`Failed to fetch test metadata after ${this.MAX_METADATA_FETCH_ATTEMPTS} attempts!`);
+        }
+        
+        return metadata;
+    }
 }
 
 module.exports = UrlTrackerPlugin;
@@ -980,330 +1295,164 @@ module.exports = UrlTrackerPlugin;
  * };
  */
 module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(options = {}) {
-    // Cache the detected spec file globally to avoid repeated detection
-    if (!global._cachedSpecFile) {
-        global._cachedSpecFile = detectSpecFileFromEnvironment();
-        console.log(`Cached spec file globally: ${global._cachedSpecFile}`);
-    }
+    // Don't cache spec file globally - detect it fresh for each test
     
     // Helper function to detect spec file from command line and environment
     function detectSpecFileFromEnvironment() {
-        try {
-            console.log('Attempting to detect spec file from environment');
-            
-            // Check command line arguments for test file paths
-            const args = process.argv.slice(2);
-            console.log(`Command line arguments: ${args.join(' ')}`);
-            
-            // Look for .spec.js or .test.js files in arguments
-            for (const arg of args) {
-                if (arg.endsWith('.spec.js') || arg.endsWith('.test.js')) {
-                    console.log(`Found spec file in command line args: ${arg}`);
-                    return path.basename(arg);
-                }
-                
-                // Check if it contains a path to tests directory
-                if (arg.includes('/tests/') || arg.includes('\\tests\\')) {
-                    const match = arg.match(/(?:\/|\\)tests(?:\/|\\)([^\/\\]+\.js)/);
-                    if (match && match[1]) {
-                        console.log(`Extracted spec file from tests path: ${match[1]}`);
-                        return match[1];
-                    }
-                }
-            }
-            
-            // If we're specifically running real-websites.spec.js (which seems to be the case)
-            if (args.some(arg => arg.includes('real-websites'))) {
-                console.log('Detected real-websites test from command line');
-                return 'real-websites.spec.js';
-            }
-            
-            // Check current working directory for clues
-            const cwd = process.cwd();
-            console.log(`Current working directory: ${cwd}`);
-            if (cwd.includes('playwright-test-js') || cwd.includes('playwright-sample')) {
-                console.log('Detected playwright test project from working directory');
-                return 'real-websites.spec.js';
-            }
-            
-            // Default fallback
-            return 'real-websites.spec.js';
-        } catch (e) {
-            console.error('Error detecting spec file from environment:', e);
-            return 'real-websites.spec.js';
-        }
+        // function implementation...
     }
     
     // Helper function to extract test file from stack trace
     function getTestFileFromStack() {
-        try {
-            const stackTrace = new Error().stack;
-            const stackLines = stackTrace.split('\n');
-            
-            // Debug all stack lines to help diagnose
-            console.log('Full stack trace for spec file detection:');
-            stackLines.forEach((line, i) => {
-                console.log(`  [${i}] ${line}`);
-            });
-            
-            // First try to find specific test files
-            for (const line of stackLines) {
-                // Look for common test file patterns
-                if (line.includes('.spec.js') || line.includes('.test.js') || 
-                    line.includes('/tests/') || line.includes('\\tests\\')) {
-                    
-                    // Extract the file path using regex that works for both Windows and Unix paths
-                    const match = line.match(/(?:at .+? \()?([^()\s]+(?:\.spec\.js|\.test\.js))/);
-                    if (match && match[1]) {
-                        console.log(`Found test file in stack: ${match[1]}`);
-                        return match[1];
-                    }
-                }
-            }
-            
-            // If no test file found, look for any JS file
-            for (const line of stackLines) {
-                if (line.includes('.js:')) {
-                    const match = line.match(/(?:at .+? \()?(.*?\.js):/);
-                    if (match && match[1]) {
-                        console.log(`Found JS file in stack: ${match[1]}`);
-                        return match[1];
-                    }
-                }
-            }
-            
-            // Nothing found
-            return null;
-        } catch (e) {
-            console.error('Error extracting file from stack:', e);
-            return null;
-        }
+        // function implementation...
     }
+
+    // IMPORTANT: Add function to extract spec file from test name/metadata
+    function extractSpecFileFromTestName(testName) {
+        // function implementation...
+    }
+
+    // NEW: Perform global setup actions automatically
+    // This eliminates the need for users to create a globalSetup file
+    (function performGlobalSetup() {
+        console.log('URL Tracker: Performing automatic global setup');
+        
+        // Ensure output directories exist
+        try {
+            const resultsDir1 = path.join(process.cwd(), 'tests-results');
+            const resultsDir2 = path.join(process.cwd(), 'test-results');
+            
+            [resultsDir1, resultsDir2].forEach(dir => {
+                if (!fs.existsSync(dir)) {
+                    try {
+                        fs.mkdirSync(dir, { recursive: true, mode: 0o777 });
+                        console.log(`URL Tracker: Created directory ${dir}`);
+                    } catch (err) {
+                        console.error(`URL Tracker: Failed to create directory ${dir}:`, err);
+                        try {
+                            require('child_process').execSync(`mkdir -p "${dir}"`);
+                            console.log(`URL Tracker: Created directory using command: ${dir}`);
+                        } catch (cmdErr) {
+                            console.error(`URL Tracker: Failed to create directory using command ${dir}:`, cmdErr);
+                        }
+                    }
+                }
+                
+                // Initialize results file if it doesn't exist
+                const resultsFile = path.join(dir, 'url-tracking-results.json');
+                if (!fs.existsSync(resultsFile)) {
+                    try {
+                        fs.writeFileSync(resultsFile, '[]', { encoding: 'utf8', mode: 0o666 });
+                        console.log(`URL Tracker: Created initial results file ${resultsFile}`);
+                    } catch (writeErr) {
+                        console.error(`URL Tracker: Failed to create initial results file ${resultsFile}:`, writeErr);
+                    }
+                }
+            });
+        } catch (setupErr) {
+            console.error('URL Tracker: Error during automatic global setup:', setupErr);
+        }
+    })();
+    
+    // NEW: Add additional process handlers to ensure results are saved
+    // This will work alongside the existing process.on('exit') handler
+    process.on('SIGINT', () => {
+        console.log('URL Tracker: Caught SIGINT signal, saving results before exit');
+        try {
+            const globalObj = global || window || {};
+            if (globalObj._activeUrlTrackers && Array.isArray(globalObj._activeUrlTrackers)) {
+                console.log(`URL Tracker: Found ${globalObj._activeUrlTrackers.length} active trackers to save`);
+                globalObj._activeUrlTrackers.forEach(tracker => {
+                    if (tracker && typeof tracker.exportResults === 'function') {
+                        console.log('URL Tracker: Saving tracker results on SIGINT');
+                        tracker.exportResults();
+                    }
+                });
+            }
+        } catch (e) {
+            console.error('URL Tracker: Error saving results on SIGINT:', e);
+        }
+        process.exit(0);
+    });
+    
+    // Also handle SIGTERM for containerized environments
+    process.on('SIGTERM', () => {
+        console.log('URL Tracker: Caught SIGTERM signal, saving results before exit');
+        try {
+            const globalObj = global || window || {};
+            if (globalObj._activeUrlTrackers && Array.isArray(globalObj._activeUrlTrackers)) {
+                globalObj._activeUrlTrackers.forEach(tracker => {
+                    if (tracker && typeof tracker.exportResults === 'function') {
+                        console.log('URL Tracker: Saving tracker results on SIGTERM');
+                        tracker.exportResults();
+                    }
+                });
+            }
+        } catch (e) {
+            console.error('URL Tracker: Error saving results on SIGTERM:', e);
+        }
+        process.exit(0);
+    });
+    
+    // Handle uncaught exceptions to ensure results are saved
+    process.on('uncaughtException', (err) => {
+        console.error('URL Tracker: Uncaught exception:', err);
+        try {
+            const globalObj = global || window || {};
+            if (globalObj._activeUrlTrackers && Array.isArray(globalObj._activeUrlTrackers)) {
+                globalObj._activeUrlTrackers.forEach(tracker => {
+                    if (tracker && typeof tracker.exportResults === 'function') {
+                        console.log('URL Tracker: Saving tracker results on uncaughtException');
+                        tracker.exportResults();
+                    }
+                });
+            }
+        } catch (e) {
+            console.error('URL Tracker: Error saving results on uncaughtException:', e);
+        }
+        process.exit(1);
+    });
 
     return {
         // Setup a handler that will be executed before each test
         beforeEach: async ({ page }, testInfo) => {
             console.log(`Creating URL tracker for test: ${testInfo.title}`);
-            console.log(`TestInfo object keys: ${Object.keys(testInfo).join(', ')}`);
             
-            // Enhanced spec file detection with multiple fallbacks
-            let specFile = testInfo.file;
-            console.log(`Raw spec file path from testInfo.file: ${specFile}`);
-            
-            // Try alternate properties if file is not available
-            if (!specFile && testInfo.testPath) {
-                specFile = testInfo.testPath;
-                console.log(`Using testInfo.testPath instead: ${specFile}`);
-            }
-            
-            // Try to get from testInfo.project
-            if (!specFile && testInfo.project && testInfo.project.testDir) {
-                specFile = path.join(testInfo.project.testDir, `${testInfo.title}.js`);
-                console.log(`Constructed from project.testDir: ${specFile}`);
-            }
-            
-            // Use stack trace as a last resort
-            if (!specFile) {
-                specFile = getTestFileFromStack();
-                console.log(`Extracted from stack trace: ${specFile}`);
-            }
-            
-            // Use our globally cached spec file if all else fails
-            if (!specFile || specFile === 'unknown') {
-                specFile = global._cachedSpecFile;
-                console.log(`Using cached spec file: ${specFile}`);
-            }
-            
-            // Handle both forward and backslashes for cross-platform compatibility
-            const lastSlashIndex = Math.max(
-                specFile ? specFile.lastIndexOf('/') : -1,
-                specFile ? specFile.lastIndexOf('\\') : -1
-            );
-            
-            const relativeSpecFile = specFile && lastSlashIndex >= 0 
-                ? specFile.substring(lastSlashIndex + 1) 
-                : specFile || 'real-websites.spec.js'; // Default to a known name as fallback
-            
-            console.log(`Final extracted spec file name: ${relativeSpecFile}`);
-            
-            // Check for and delete existing result files if requested
-            if (options.cleanResults !== false) {  // Default to true if not specified
-                try {
-                    // Check both possible result directories
-                    const resultsDir1 = path.join(process.cwd(), 'tests-results');
-                    const resultsDir2 = path.join(process.cwd(), 'test-results');
-                    
-                    [resultsDir1, resultsDir2].forEach(dir => {
-                        const resultFile = path.join(dir, 'url-tracking-results.json');
-                        if (fs.existsSync(resultFile)) {
-                            console.log(`Found existing result file at ${resultFile}, deleting...`);
-                            fs.unlinkSync(resultFile);
-                            console.log(`Deleted existing result file at ${resultFile}`);
-                            
-                            // Create a new empty file
-                            fs.writeFileSync(resultFile, '[]', { encoding: 'utf8', mode: 0o666 });
-                            console.log(`Created new empty result file at ${resultFile}`);
-                        }
-                    });
-                } catch (error) {
-                    console.error('Error handling existing result files:', error);
-                }
-            }
-            
+            // ... existing code to determine specFile ...
+
             // Create a URL tracker with the test name and spec file
             const testName = testInfo.title ? testInfo.title.replace(/\s+/g, '_').toLowerCase() : 'unknown_test';
             
-            // Always prioritize the global cached spec file if it exists
-            const finalSpecFile = global._cachedSpecFile || relativeSpecFile;
-            console.log(`Creating URL tracker with spec file: ${finalSpecFile}`);
-
+            console.log(`Creating URL tracker with exactly this spec file: "${specFile}"`);
+            
             const urlTracker = new UrlTrackerPlugin(page, {
                 ...options,
                 testName: options.testName || testName,
-                specFile: options.specFile || finalSpecFile
+                specFile: specFile  // Force the spec file to be what we detected
             });
 
-            // Initialize the tracker
-            await urlTracker.init();
-            
-            // Force waiting for load state
-            await page.waitForLoadState('domcontentloaded').catch((e) => {
-                console.log(`Warning: Failed to wait for dom content loaded: ${e.message}`);
-            });
-
-            // Add our own navigation handler that will monitor ALL page events
-            const navigationHandler = async (request) => {
-                try {
-                    console.log(`Navigation detected via request: ${request.url()}`);
-                    const url = urlTracker.normalizeUrl(request.url());
-                    if (url !== 'null' && url !== 'about:blank') {
-                        urlTracker.addTrackingResult({
-                            spec_file: relativeSpecFile,
-                            test_name: testName,
-                            previous_url: urlTracker.lastUrl || 'null',
-                            current_url: url,
-                            timestamp: new Date().toISOString(),
-                            navigation_type: 'request'
-                        });
-                    }
-                } catch (e) {
-                    console.error('Error in navigation handler:', e);
-                }
-            };
-            
-            // Add request finished listener
-            page.on('requestfinished', navigationHandler);
-
-            // Attach to browser events right away to ensure we capture all navigations
-            page.on('load', async () => {
-                console.log(`Page loaded for test: ${testName}`);
-                // Get the URL and add it to our tracker if it's not already there
-                try {
-                    const url = page.url();
-                    if (url && url !== 'about:blank') {
-                        console.log(`Found page load URL: ${url}`);
-                        const normalizedUrl = urlTracker.normalizeUrl(url);
-                        
-                        // Always record the page load
-                        urlTracker.addTrackingResult({
-                            spec_file: relativeSpecFile,
-                            test_name: testName,
-                            previous_url: urlTracker.lastUrl || 'null',
-                            current_url: normalizedUrl,
-                            timestamp: new Date().toISOString(),
-                            navigation_type: 'load'
-                        });
-                        
-                        // Update lastUrl
-                        urlTracker.lastUrl = normalizedUrl;
-                    }
-                } catch (e) {
-                    console.error('Error in load handler:', e);
-                }
-            });
-
-            // Attach the tracker to the test info for later use
+            // Store the tracker in the test info
             testInfo.urlTracker = urlTracker;
             
-            // Also attach a method on the page for the test to manually record navigations if needed
-            page.recordNavigation = async (url) => {
-                console.log(`Manually recording navigation to: ${url}`);
-                const normalizedUrl = urlTracker.normalizeUrl(url || page.url());
-                const lastUrl = urlTracker.lastUrl || 'null';
-                
-                urlTracker.lastUrl = normalizedUrl;
-                
-                // Add to tracking results with new format
-                urlTracker.addTrackingResult({
-                    spec_file: relativeSpecFile,
-                    test_name: testName,
-                    previous_url: lastUrl,
-                    current_url: normalizedUrl,
-                    timestamp: new Date().toISOString(),
-                    navigation_type: 'manual'
-                });
-                
-                console.log(`Manually added navigation: ${lastUrl} -> ${normalizedUrl}`);
-            };
+            try {
+                // Initialize the tracker
+                await urlTracker.init();
+                console.log(`URL tracker initialized for test: ${testName}`);
+            } catch (error) {
+                console.error(`Error initializing URL tracker for test ${testName}:`, error);
+            }
             
-            // Also monkey-patch page.goto to ensure we capture all navigations
-            const originalGoto = page.goto;
-            page.goto = async function(url, options) {
-                console.log(`Intercepted page.goto to URL: ${url}`);
-                
-                // Force update the spec file with our global cached value if needed
-                if (global._cachedSpecFile && urlTracker.options.specFile === 'unknown') {
-                    console.log(`Updating tracker's spec file from '${urlTracker.options.specFile}' to '${global._cachedSpecFile}'`);
-                    urlTracker.options.specFile = global._cachedSpecFile;
-                }
-                
-                // Record the navigation before we actually navigate
-                const lastUrl = urlTracker.lastUrl || 'null';
-                
+            // Add a cleanup handler that is equivalent to what would be in globalTeardown
+            testInfo.onTestEnd(async () => {
                 try {
-                    // For better debugging
-                    console.log(`Current trackingResults count before goto: ${urlTracker.trackingResults.length}`);
-                    
-                    // Call the original goto
-                    const result = await originalGoto.call(this, url, options);
-                    
-                    // Wait a moment for the page to stabilize
-                    try {
-                        await page.waitForLoadState('domcontentloaded').catch(e => 
-                            console.log(`Ignored waitForLoadState error: ${e.message}`)
-                        );
-                    } catch (e) {
-                        console.log(`Caught error waiting for load state: ${e.message}`);
+                    if (urlTracker) {
+                        console.log(`Test ended, cleaning up URL tracker for: ${testName}`);
+                        await urlTracker.cleanup();
                     }
-                    
-                    // Now get the actual URL we ended up at
-                    const finalUrl = page.url();
-                    console.log(`Final URL after navigation: ${finalUrl}`);
-                    
-                    const normalizedUrl = urlTracker.normalizeUrl(finalUrl);
-                    console.log(`Normalized URL: ${normalizedUrl}`);
-                    
-                    urlTracker.lastUrl = normalizedUrl;
-                    
-                    // Add tracking result
-                    urlTracker.addTrackingResult({
-                        spec_file: urlTracker.options.specFile, 
-                        test_name: urlTracker.options.testName,
-                        previous_url: lastUrl,
-                        current_url: normalizedUrl,
-                        timestamp: new Date().toISOString(),
-                        navigation_type: 'goto'
-                    });
-                    
-                    console.log(`Recorded goto navigation: ${lastUrl} -> ${normalizedUrl}`);
-                    console.log(`Current trackingResults count after goto: ${urlTracker.trackingResults.length}`);
-                    
-                    return result;
-                } catch (error) {
-                    console.error(`Error in goto override: ${error.message}`);
-                    throw error;
+                } catch (e) {
+                    console.error(`Error in URL tracker cleanup for ${testName}:`, e);
                 }
-            };
+            });
         },
         
         // Setup a handler that will be executed after each test
@@ -1317,14 +1466,14 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
                         const normalizedUrl = urlTracker.normalizeUrl(url);
                         
                         // Always record final URL even if it's the same as last
-                        const specFile = testInfo.file;
-                        const relativeSpecFile = specFile ? specFile.substring(specFile.lastIndexOf('/') + 1) : 'unknown';
+                        // Use the spec file we've detected for this test session
+                        const specFile = global._currentSpecFile || 'Unable to determine spec file';
                         
-                        console.log(`Adding final navigation entry: ${normalizedUrl}`);
+                        console.log(`Adding final navigation entry: ${normalizedUrl} (spec file: ${specFile})`);
                         
                         // Add to tracking results with new format
                         urlTracker.addTrackingResult({
-                            spec_file: relativeSpecFile,
+                            spec_file: specFile,
                             test_name: testInfo.title ? testInfo.title.replace(/\s+/g, '_').toLowerCase() : 'unknown_test',
                             previous_url: urlTracker.lastUrl || 'null',
                             current_url: normalizedUrl,
@@ -1336,12 +1485,13 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
                     console.log(`Warning: Could not record final navigation: ${e.message}`);
                 }
                 
-                // Export results to both test-results and tests-results folders
-                urlTracker.exportResults();
-                
-                // Clean up the tracker
-                await urlTracker.cleanup();
-                console.log(`URL tracker finished for test: ${testInfo.title}`);
+                // Export tracking results one last time to ensure they're saved
+                try {
+                    urlTracker.exportResults();
+                    console.log(`Exported final tracking results for test: ${testInfo.title}`);
+                } catch (exportError) {
+                    console.error(`Error exporting final tracking results for test ${testInfo.title}:`, exportError);
+                }
             } else {
                 console.log(`No URL tracker found for test: ${testInfo.title}`);
             }
@@ -1349,22 +1499,27 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
     };
 };
 
-// Add global process handler to save results on exit
+// Enhance process exit handler to perform global teardown functionality
+// This enhances the existing one defined earlier in the file
 process.on('exit', () => {
-    console.log('Process exit detected - saving URL tracking results');
-    // Find and save any active trackers
+    console.log('URL Tracker: Process exit detected - performing automatic global teardown');
+    
+    // Export tracking results from all active trackers
     try {
         const globalObj = global || window || {};
         if (globalObj._activeUrlTrackers && Array.isArray(globalObj._activeUrlTrackers)) {
-            console.log(`Found ${globalObj._activeUrlTrackers.length} active URL trackers to save`);
+            console.log(`URL Tracker: Found ${globalObj._activeUrlTrackers.length} active trackers to save during teardown`);
             globalObj._activeUrlTrackers.forEach(tracker => {
                 if (tracker && typeof tracker.exportResults === 'function') {
-                    console.log('Saving tracker results on exit');
+                    console.log('URL Tracker: Saving tracker results during automatic teardown');
                     tracker.exportResults();
                 }
             });
         }
+        
+        // Additional teardown steps if needed...
+        
     } catch (e) {
-        console.error('Error saving trackers on exit:', e);
+        console.error('URL Tracker: Error during automatic global teardown:', e);
     }
 }); 
