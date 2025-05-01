@@ -185,26 +185,31 @@ class UrlTrackerPlugin extends EventEmitter {
             const currentUrl = this.normalizeUrl(pageUrl);
             console.log(`Initial URL: ${currentUrl}`);
             
-            // ALWAYS record the initial URL, even if it's 'null'
-            this.navigationHistory.push({
-                url: currentUrl,
-                type: 'navigation',
-                timestamp: Date.now()
-            });
-            
-            // Add to tracking results with new format
-            this.addTrackingResult({
-                spec_file: this.options.specFile,
-                test_name: this.options.testName,
-                previous_url: 'null',
-                current_url: currentUrl,
-                timestamp: new Date().toISOString(),
-                navigation_type: 'page_load' // More specific navigation type
-            });
+            // Only record the initial URL if it's not 'null'
+            if (currentUrl !== 'null') {
+                this.navigationHistory.push({
+                    url: currentUrl,
+                    type: 'navigation',
+                    timestamp: Date.now()
+                });
+                
+                // Add to tracking results with new format
+                this.addTrackingResult({
+                    spec_file: this.options.specFile,
+                    test_name: this.options.testName,
+                    previous_url: 'null',
+                    current_url: currentUrl,
+                    timestamp: new Date().toISOString(),
+                    navigation_type: 'page_load' // More specific navigation type
+                });
+                
+                console.log(`Added initial URL to history: ${currentUrl}`);
+            } else {
+                console.log('Initial URL is null, skipping recording');
+            }
             
             this.lastUrl = currentUrl;
             this.lastNavigationType = 'page_load';
-            console.log(`Added initial URL to history: ${currentUrl}`);
 
             await this.setupPageListeners();
             this.isInitialized = true;
@@ -297,6 +302,8 @@ class UrlTrackerPlugin extends EventEmitter {
                     });
                     
                     console.log(`Added tracking result: ${this.options.testName} - ${navigation_type} from ${oldUrl} to ${newUrl}`);
+                } else if (newUrl === 'null') {
+                    console.log('Navigation to null URL detected, skipping recording');
                 }
             }
         });
@@ -338,6 +345,8 @@ class UrlTrackerPlugin extends EventEmitter {
 
                         this.lastNavigationType = finalType;
                         this.emit('urlChange', { oldUrl, newUrl });
+                    } else if (newUrl === 'null') {
+                        console.log('History change to null URL detected, skipping recording');
                     }
                 });
                 this.isFunctionExposed = true;
@@ -1049,6 +1058,12 @@ class UrlTrackerPlugin extends EventEmitter {
         // Debug the incoming result
         console.log(`Adding tracking result: ${JSON.stringify(result)}`);
         
+        // Skip results with null URLs
+        if (result.current_url === 'null' || result.current_url === null) {
+            console.log('Skipping result with null URL');
+            return;
+        }
+        
         // IMPORTANT: Always use the spec file from options, which may have been updated from metadata
         const targetSpecFile = this.options.specFile;
         console.log(`Using spec file from options: ${targetSpecFile}`);
@@ -1088,6 +1103,12 @@ class UrlTrackerPlugin extends EventEmitter {
                 navigation_type: navigation_type
             };
             console.log(`Normalized result: ${JSON.stringify(finalResult)}`);
+        }
+        
+        // Check again after normalization to ensure we're not adding null URLs
+        if (finalResult.current_url === 'null') {
+            console.log('Skipping normalized result with null URL');
+            return;
         }
         
         // Add the result to the array
@@ -1465,21 +1486,25 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
                     if (url && url !== 'about:blank') {
                         const normalizedUrl = urlTracker.normalizeUrl(url);
                         
-                        // Always record final URL even if it's the same as last
-                        // Use the spec file we've detected for this test session
-                        const specFile = global._currentSpecFile || 'Unable to determine spec file';
-                        
-                        console.log(`Adding final navigation entry: ${normalizedUrl} (spec file: ${specFile})`);
-                        
-                        // Add to tracking results with new format
-                        urlTracker.addTrackingResult({
-                            spec_file: specFile,
-                            test_name: testInfo.title ? testInfo.title.replace(/\s+/g, '_').toLowerCase() : 'unknown_test',
-                            previous_url: urlTracker.lastUrl || 'null',
-                            current_url: normalizedUrl,
-                            timestamp: new Date().toISOString(),
-                            navigation_type: 'final'
-                        });
+                        // Only record final URL if it's not null
+                        if (normalizedUrl !== 'null') {
+                            // Use the spec file we've detected for this test session
+                            const specFile = global._currentSpecFile || 'Unable to determine spec file';
+                            
+                            console.log(`Adding final navigation entry: ${normalizedUrl} (spec file: ${specFile})`);
+                            
+                            // Add to tracking results with new format
+                            urlTracker.addTrackingResult({
+                                spec_file: specFile,
+                                test_name: testInfo.title ? testInfo.title.replace(/\s+/g, '_').toLowerCase() : 'unknown_test',
+                                previous_url: urlTracker.lastUrl || 'null',
+                                current_url: normalizedUrl,
+                                timestamp: new Date().toISOString(),
+                                navigation_type: 'final'
+                            });
+                        } else {
+                            console.log('Final URL is null, skipping recording');
+                        }
                     }
                 } catch (e) {
                     console.log(`Warning: Could not record final navigation: ${e.message}`);
