@@ -2,17 +2,49 @@ const { EventEmitter } = require('events');
 const fs = require('fs');
 const path = require('path');
 
-// Create a unique run ID for this process
-const PROCESS_RUN_ID = Date.now().toString() + '-' + Math.random().toString(36).substring(2, 15);
-console.log(`[UrlTracker] PROCESS_RUN_ID: ${PROCESS_RUN_ID}`);
+// Global flag to track if file has been reset in this process
+let fileResetCompleted = false;
 
-// Reset static flag for this process - intentionally setting to false
-let hasResetFileInThisProcess = false;
+// Function to reset tracking file when module is first loaded
+function resetTrackingFileOnLoad() {
+    console.log('[UrlTracker] Module loaded - resetting tracking file');
+    const outputDir = 'test-results';
+    const outputFilename = 'url-tracking.json';
+    
+    try {
+        // Create directory if needed
+        const fullOutputDir = path.resolve(process.cwd(), outputDir);
+        if (!fs.existsSync(fullOutputDir)) {
+            console.log(`[UrlTracker] Creating output directory: ${fullOutputDir}`);
+            fs.mkdirSync(fullOutputDir, { recursive: true });
+        }
+        
+        // Delete and recreate file
+        const outputPath = path.resolve(fullOutputDir, outputFilename);
+        console.log(`[UrlTracker] Resetting tracking file at module load: ${outputPath}`);
+        
+        if (fs.existsSync(outputPath)) {
+            fs.unlinkSync(outputPath);
+            console.log('[UrlTracker] Existing tracking file deleted');
+        }
+        
+        fs.writeFileSync(outputPath, '[]', 'utf8');
+        console.log('[UrlTracker] New empty tracking file created at module load');
+        
+        return true;
+    } catch (error) {
+        console.log(`[UrlTracker] Error resetting file on module load: ${error.message}`);
+        return false;
+    }
+}
+
+// Reset tracking file immediately when module is loaded
+resetTrackingFileOnLoad();
 
 class UrlTracker extends EventEmitter {
     constructor(browser, options = {}) {
         super();
-        this.browser = browser;
+        // Note: browser is no longer used - just kept for backward compatibility
         this.options = {
             trackHistory: true,
             outputDirectory: 'test-results',
@@ -22,12 +54,18 @@ class UrlTracker extends EventEmitter {
             ...options
         };
         
+        // Override resetFileOnStart to true regardless of options passed
+        this.options.resetFileOnStart = true;
+        
         this.navigationHistory = [];
         this.currentUrl = '';
         this.isInitialized = false;
         this.sessionId = '';
         this.currentSpecFile = '';
         this.currentTestName = '';
+        this.hasRecordedFinalUrl = false;
+        this.hasSavedReport = false;
+        this.trackerInstalled = false;
         
         // Navigation type mapping
         this.navigationTypeMap = {
@@ -51,101 +89,310 @@ class UrlTracker extends EventEmitter {
             'manual': 'manual_record',
             'fallback': 'fallback',
             'dummy': 'dummy',
-            'command': 'command'
+            'command': 'command',
+            'initial': 'initial'
         };
         
-        // Always clear tracking file on startup if enabled
-        if (this.options.resetFileOnStart) {
-            this.clearTrackingFile();
-        }
+        // Always reset global flag and delete file on startup
+        fileResetCompleted = false;
+        this.log('FORCE DELETING TRACKING FILE on construction');
+        this.forceDeleteTrackingFile();
     }
 
     log(message) {
-        console.log(`[UrlTracker] ${message}`);
+        if (this.options.enableLogging) {
+            console.log(`[UrlTracker] ${message}`);
+        }
     }
     
     /**
-     * Clear tracking file at startup
+     * Get a pure JavaScript tracking script to inject
+     * This must be manually injected via a service
      */
-    clearTrackingFile() {
-        try {
-            this.log('Clearing tracking file...');
-            const outputDir = this.options.outputDirectory || 'test-results';
-            const outputFilename = this.options.outputFilename || 'url-tracking.json';
+    getBrowserTrackingScript() {
+        return `
+        // Pure browser-side URL tracking script - NO WebDriverIO dependencies
+        (function() {
+            console.log('[UrlTracker] Installing pure browser URL tracking');
             
-            // Create directory if needed
-            const fullOutputDir = path.resolve(process.cwd(), outputDir);
-            if (!fs.existsSync(fullOutputDir)) {
-                this.log(`Creating output directory: ${fullOutputDir}`);
-                fs.mkdirSync(fullOutputDir, { recursive: true });
-            }
-            
-            // Check and delete file
-            const outputPath = path.resolve(fullOutputDir, outputFilename);
-            this.log(`Clearing tracking file at: ${outputPath}`);
-            
-            if (fs.existsSync(outputPath)) {
+            // Initialize tracking object if it doesn't exist
+            if (!window.__lambdaTestPureUrlTracker) {
+                window.__lambdaTestPureUrlTracker = {
+                    currentUrl: window.location.href,
+                    history: [],
+                    startTime: new Date().toISOString(),
+                    lastCheck: new Date().getTime(),
+                    urlChangeCallbacks: []
+                };
+                
+                // Record initial URL immediately
+                window.__lambdaTestPureUrlTracker.history.push({
+                    url: window.location.href,
+                    timestamp: new Date().toISOString(),
+                    type: 'initial'
+                });
+                
+                // Store in sessionStorage for persistence
                 try {
-                    fs.unlinkSync(outputPath);
-                    this.log('Existing tracking file deleted');
-                } catch (e) {
-                    this.log(`Error deleting file: ${e.message}`);
-                    // Try alternate method
-                    fs.writeFileSync(outputPath, '[]', {flag: 'w'});
-                    this.log('Tracking file emptied via write');
+                    sessionStorage.setItem('__lambdaUrlHistory', 
+                        JSON.stringify(window.__lambdaTestPureUrlTracker.history));
+                } catch(e) {
+                    console.error('[UrlTracker] Error saving to sessionStorage:', e);
                 }
+                
+                console.log('[UrlTracker] Recorded initial URL:', window.location.href);
+                
+                // Direct interval polling method
+                setInterval(function() {
+                    var currentUrl = window.location.href;
+                    
+                    if (currentUrl !== window.__lambdaTestPureUrlTracker.currentUrl) {
+                        console.log('[UrlTracker] URL changed:', 
+                            window.__lambdaTestPureUrlTracker.currentUrl, '->', currentUrl);
+                        
+                        // Record change
+                        const entry = {
+                            url: currentUrl,
+                            timestamp: new Date().toISOString(),
+                            previousUrl: window.__lambdaTestPureUrlTracker.currentUrl,
+                            type: 'location_change'
+                        };
+                        
+                        window.__lambdaTestPureUrlTracker.history.push(entry);
+                        window.__lambdaTestPureUrlTracker.currentUrl = currentUrl;
+                        
+                        // Notify any callbacks
+                        window.__lambdaTestPureUrlTracker.urlChangeCallbacks.forEach(function(callback) {
+                            try {
+                                callback(entry);
+                            } catch(e) {
+                                console.error('[UrlTracker] Callback error:', e);
+                            }
+                        });
+                        
+                        // Store in sessionStorage for persistence
+                        try {
+                            sessionStorage.setItem('__lambdaUrlHistory', 
+                                JSON.stringify(window.__lambdaTestPureUrlTracker.history));
+                        } catch(e) {
+                            console.error('[UrlTracker] Error saving to sessionStorage:', e);
+                        }
+                    }
+                    
+                    window.__lambdaTestPureUrlTracker.lastCheck = new Date().getTime();
+                }, 500);
             }
             
-            // Create empty file
-            fs.writeFileSync(outputPath, '[]', 'utf8');
-            this.log('Empty tracking file created');
-            
-            return true;
-        } catch (error) {
-            this.log(`Error clearing tracking file: ${error.message}`);
-            console.error(error);
-            return false;
-        }
+            // Return tracker object for external use
+            return {
+                installed: true,
+                initialUrl: window.location.href,
+                history: window.__lambdaTestPureUrlTracker.history,
+                registerCallback: function(callback) {
+                    if (typeof callback === 'function') {
+                        window.__lambdaTestPureUrlTracker.urlChangeCallbacks.push(callback);
+                        return true;
+                    }
+                    return false;
+                }
+            };
+        })();
+        `;
     }
-
+    
+    /**
+     * Get data collector script
+     */
+    getUrlCollectorScript() {
+        return `
+        // Pure JavaScript data collector 
+        (function() {
+            var result = {
+                url: window.location.href,
+                timestamp: new Date().toISOString(),
+                history: []
+            };
+            
+            try {
+                // Try to get history from tracker if it exists
+                if (window.__lambdaTestPureUrlTracker && window.__lambdaTestPureUrlTracker.history) {
+                    result.history = window.__lambdaTestPureUrlTracker.history;
+                    result.trackerInstalled = true;
+                } else {
+                    // Try to recover from sessionStorage
+                    var storedHistory = sessionStorage.getItem('__lambdaUrlHistory');
+                    if (storedHistory) {
+                        result.history = JSON.parse(storedHistory);
+                        result.recoveredFromStorage = true;
+                    }
+                }
+            } catch(e) {
+                result.error = e.message;
+            }
+            
+            // Always include at least the current URL
+            if (!result.history || result.history.length === 0) {
+                result.history = [{
+                    url: window.location.href, 
+                    timestamp: new Date().toISOString(),
+                    type: 'fallback'
+                }];
+            }
+            
+            return result;
+        })();
+        `;
+    }
+    
     /**
      * Initialize the URL tracker
+     * This is a no-op initialization since we don't have browser access
+     * The tracking script must be manually injected via a service or similar
      */
     async init() {
-        if (this.isInitialized) {
+        this.log('Initializing URL tracker (WebDriverIO-free implementation)');
+        
+        // Reset tracking file
+        this.forceDeleteTrackingFile();
+        
+        // Set as initialized
+        this.isInitialized = true;
+        this.trackerInstalled = false;
+        
+        this.log('URL tracker initialized - NO WebDriverIO DEPENDENCIES');
+        
+        return true;
+    }
+    
+    /**
+     * Process location history from browser
+     * This must be called manually with history data
+     */
+    processLocationHistory(browserHistory) {
+        if (!browserHistory || !Array.isArray(browserHistory) || browserHistory.length === 0) {
             return;
         }
-
-        this.log('Initializing URL Tracker...');
-
-        // Try to get initial URL
-        try {
-            // Just get URL directly - simplest approach that works everywhere
-            const url = await this.browser.getUrl();
-            this.currentUrl = url || '';
-            this.log(`Initial URL: ${this.currentUrl}`);
+        
+        this.log(`Processing browser location history: ${browserHistory.length} entries`);
+        
+        let newEntryCount = 0;
+        
+        // Go through each entry and add if it's new
+        for (const entry of browserHistory) {
+            // Extract URL - handle both formats for compatibility
+            const url = entry.url || entry.current_url;
+            const timestamp = entry.timestamp || new Date().toISOString();
+            const previousUrl = entry.previousUrl || entry.previous_url || this.currentUrl || '';
+            const type = entry.type || entry.navigation_type || 'location_change';
             
-            // Record initial page
-            if (this.currentUrl && this.currentUrl !== 'about:blank') {
-                this.handleUrlChange(this.currentUrl, 'initial');
+            if (!url) continue;
+            
+            // Skip if we already have this exact entry
+            const isDuplicate = this.navigationHistory.some(existing => 
+                (existing.timestamp === timestamp && existing.current_url === url) ||
+                (existing.current_url === url && existing.previous_url === previousUrl)
+            );
+            
+            if (!isDuplicate) {
+                const navigationEvent = {
+                    previous_url: previousUrl,
+                    current_url: url,
+                    timestamp: timestamp,
+                    navigation_type: type
+                };
+                
+                this.navigationHistory.push(navigationEvent);
+                this.currentUrl = url;
+                newEntryCount++;
+                
+                // Emit event
+                const eventWithContext = {
+                    ...navigationEvent,
+                    spec_file: this.currentSpecFile,
+                    test_name: this.currentTestName
+                };
+                this.emit('urlChange', eventWithContext);
             }
-
-            // Get session ID if available
-            if (this.browser.sessionId) {
-                this.sessionId = this.browser.sessionId;
-                this.log(`Session ID: ${this.sessionId}`);
-            }
-        } catch (error) {
-            this.log(`Error during initialization: ${error.message}`);
         }
-
-        this.isInitialized = true;
+        
+        if (newEntryCount > 0) {
+            this.log(`Added ${newEntryCount} new entries from browser history`);
+            this.saveReport();
+        }
+    }
+    
+    /**
+     * Directly add a URL to the history
+     */
+    directlyAddUrl(url, source = 'direct_add') {
+        if (!url || url === this.currentUrl) return false;
+        
+        this.log(`Directly adding URL: ${url} (source: ${source})`);
+        
+        const navigationEvent = {
+            previous_url: this.currentUrl || '',
+            current_url: url,
+            timestamp: new Date().toISOString(),
+            navigation_type: source
+        };
+        
+        this.navigationHistory.push(navigationEvent);
+        this.currentUrl = url;
+        
+        // Emit event
+        const eventWithContext = {
+            ...navigationEvent,
+            spec_file: this.currentSpecFile,
+            test_name: this.currentTestName
+        };
+        this.emit('urlChange', eventWithContext);
+        
+        // Save immediately
+        this.saveReport();
+        
+        return true;
+    }
+    
+    /**
+     * Handle URL change (for compatibility with existing code)
+     */
+    handleUrlChange(newUrl, type, command) {
+        return this.directlyAddUrl(newUrl, type || 'url_change');
+    }
+    
+    /**
+     * Get current URL - this is the cached value, not from browser
+     */
+    getCurrentUrl() {
+        return this.currentUrl;
+    }
+    
+    /**
+     * IMPORTANT: This method should be called by the test framework with navigation data
+     * as we no longer have direct browser access
+     */
+    updateFromNavigation(url, type = 'navigation', details = '') {
+        this.log(`Received navigation update: ${url} (${type})`);
+        return this.handleUrlChange(url, type, details);
     }
 
     setTestContext(specFile, testName) {
         this.currentSpecFile = specFile;
         this.currentTestName = testName;
         this.log(`Test context set: ${specFile} - ${testName}`);
+        
+        // Reset per-test flags when test context changes
+        this.hasRecordedFinalUrl = false;
+        this.hasSavedReport = false;
+        
+        // If we're setting a new test context and file reset is enabled, ensure it's reset
+        if (this.options.resetFileOnStart) {
+            this.log('New test context - checking if tracking file needs reset');
+            // Only reset if it hasn't been reset in this process
+            if (!fileResetCompleted) {
+                this.forceDeleteTrackingFile();
+            }
+        }
     }
 
     setSpecFile(specFile) {
@@ -153,87 +400,9 @@ class UrlTracker extends EventEmitter {
         this.log(`Spec file set: ${specFile}`);
     }
 
-    normalizeUrl(url) {
-        if (!url) return '';
-        
-        // Handle relative URLs
-        if (url.startsWith('/')) {
-            return url;
-        }
-        
-        // Remove trailing slashes for consistency
-        return url.replace(/\/$/, '');
-    }
-
-    handleUrlChange(newUrl, type, command) {
-        const timestamp = new Date().toISOString();
-        
-        // Skip if no URL
-        if (!newUrl) return;
-        
-        // Normalize URLs
-        const normalizedCurrentUrl = this.normalizeUrl(this.currentUrl);
-        const normalizedNewUrl = this.normalizeUrl(newUrl);
-        
-        // Skip if URL hasn't actually changed
-        if (normalizedCurrentUrl === normalizedNewUrl && type !== 'final') {
-            return;
-        }
-        
-        // Determine navigation type based on available info
-        let navigationType = this.navigationTypeMap[type] || 'fallback';
-        
-        // Create navigation event
-        const navigationEvent = {
-            previous_url: this.currentUrl,
-            current_url: newUrl,
-            timestamp,
-            navigation_type: navigationType
-        };
-        
-        // Add to history
-        this.navigationHistory.push(navigationEvent);
-        
-        // Update current URL
-        this.currentUrl = newUrl;
-        
-        this.log(`URL change recorded: ${navigationType} - ${navigationEvent.previous_url} -> ${newUrl}`);
-        
-        // Emit event with full context for event listeners
-        const eventWithContext = {
-            ...navigationEvent,
-            spec_file: this.currentSpecFile,
-            test_name: this.currentTestName
-        };
-        this.emit('urlChange', eventWithContext);
-    }
-
-    getNavigationHistory() {
-        return this.navigationHistory;
-    }
-
-    getCurrentUrl() {
-        return this.currentUrl;
-    }
-
-    clearHistory() {
-        this.navigationHistory = [];
-    }
-
-    /**
-     * Get current URL directly from browser
-     */
-    async refreshCurrentUrl() {
-        try {
-            const url = await this.browser.getUrl();
-            if (url && url !== this.currentUrl) {
-                this.handleUrlChange(url, 'refresh');
-            }
-            return url;
-        } catch (error) {
-            this.log(`Error getting current URL: ${error.message}`);
-            return this.currentUrl;
-        }
+    setSessionId(sessionId) {
+        this.sessionId = sessionId;
+        this.log(`Session ID set: ${sessionId}`);
     }
 
     saveReport() {
@@ -276,34 +445,71 @@ class UrlTracker extends EventEmitter {
             const outputPath = path.resolve(fullOutputDir, outputFilename);
             this.log(`Saving report to: ${outputPath}`);
             
-            // Read existing data (if any)
+            // Create the file if it doesn't exist or has invalid content
             let existingData = [];
-            try {
-                if (fs.existsSync(outputPath)) {
+            let fileExists = fs.existsSync(outputPath);
+            
+            if (fileExists) {
+                try {
+                    // Read existing data 
                     const fileContent = fs.readFileSync(outputPath, 'utf8');
                     if (fileContent.trim() !== '') {
                         try {
                             existingData = JSON.parse(fileContent);
                             if (!Array.isArray(existingData)) {
+                                this.log('Existing data is not an array, creating new file');
                                 existingData = [];
+                                fs.writeFileSync(outputPath, '[]', 'utf8');
                             }
                         } catch (e) {
+                            this.log(`Error parsing existing data, creating new file: ${e.message}`);
                             existingData = [];
+                            fs.writeFileSync(outputPath, '[]', 'utf8');
                         }
+                    } else {
+                        // Empty file - initialize with array
+                        this.log('File exists but is empty, initializing with array');
+                        fs.writeFileSync(outputPath, '[]', 'utf8');
                     }
+                } catch (e) {
+                    this.log(`Error reading file: ${e.message}, creating new one`);
+                    fs.writeFileSync(outputPath, '[]', 'utf8');
                 }
-            } catch (e) {
-                this.log(`Error reading tracking file: ${e.message}`);
-                existingData = [];
+            } else {
+                // File doesn't exist, create it
+                this.log('Creating new tracking file');
+                fs.writeFileSync(outputPath, '[]', 'utf8');
             }
             
-            // Add new report
-            existingData.push(report);
+            // Check if we have a duplicate report for this test
+            const existingReportIndex = existingData.findIndex(
+                r => r.spec_file === report.spec_file && r.test_name === report.test_name && r.session_id === report.session_id
+            );
             
-            // Write to file
+            if (existingReportIndex !== -1) {
+                // Update existing report
+                this.log(`Updating existing report at index ${existingReportIndex}`);
+                existingData[existingReportIndex] = report;
+            } else {
+                // Add new report
+                this.log('Adding new report to file');
+                existingData.push(report);
+            }
+            
+            // Write the updated data
             try {
                 fs.writeFileSync(outputPath, JSON.stringify(existingData, null, 2), 'utf8');
                 this.log(`Report saved with ${report.navigation_count} navigation events`);
+                this.hasSavedReport = true;
+                
+                // Verify the file was written correctly
+                try {
+                    const content = fs.readFileSync(outputPath, 'utf8');
+                    const parsed = JSON.parse(content);
+                    this.log(`Verified saved file: contains ${parsed.length} reports`);
+                } catch (e) {
+                    this.log(`Warning: Saved file verification failed: ${e.message}`);
+                }
             } catch (e) {
                 this.log(`Error writing to tracking file: ${e.message}`);
                 console.error(e);
@@ -336,35 +542,36 @@ class UrlTracker extends EventEmitter {
     }
 
     /**
-     * Capture URL before test exit
+     * Finalize and clean up before the test ends
      */
-    async onBeforeExit() {
-        this.log('Finalizing test data before exit');
+    onBeforeExit() {
+        this.log('Finalizing URL tracking data');
         
-        // Just get the final URL directly
-        try {
-            const finalUrl = await this.browser.getUrl();
-            if (finalUrl) {
-                this.handleUrlChange(finalUrl, 'final');
-            }
-        } catch (error) {
-            this.log(`Error getting final URL: ${error.message}`);
-        }
+        // Record final state
+        this.recordFinalUrl();
         
-        // Save the report
+        // Force save report
         this.saveReport();
+        this.hasRecordedFinalUrl = true;
+        
+        return true;
     }
 
+    /**
+     * Clean up all resources
+     */
     destroy() {
         this.log('Destroying URL Tracker...');
         
-        // Collect and save final navigation data
-        this.onBeforeExit().then(() => {
-            // Clear event listeners
-            this.removeAllListeners();
-            this.isInitialized = false;
-            this.log('Cleanup complete');
-        });
+        // Collect and save final navigation data if not already done
+        if (!this.hasRecordedFinalUrl || !this.hasSavedReport) {
+            this.onBeforeExit();
+        }
+        
+        // Clear event listeners
+        this.removeAllListeners();
+        this.isInitialized = false;
+        this.log('Cleanup complete');
     }
 
     recordNavigation(url, type = 'manual_record', details = 'user_recorded') {
@@ -373,10 +580,174 @@ class UrlTracker extends EventEmitter {
     }
 
     recordFinalUrl() {
+        // Prevent duplicate recording
+        if (this.hasRecordedFinalUrl) {
+            return;
+        }
+        
         if (this.currentUrl) {
             this.log(`Recording final URL: ${this.currentUrl}`);
             this.handleUrlChange(this.currentUrl, 'final', 'test_end');
+            this.hasRecordedFinalUrl = true;
         }
+    }
+
+    /**
+     * Helper method to get the tracking file path
+     */
+    getTrackingFilePath() {
+        const outputDir = this.options.outputDirectory || 'test-results';
+        const outputFilename = this.options.outputFilename || 'url-tracking.json';
+        return path.resolve(process.cwd(), outputDir, outputFilename);
+    }
+    
+    /**
+     * Force delete tracking file by bypassing all checks
+     */
+    forceDeleteTrackingFile() {
+        try {
+            const outputDir = this.options.outputDirectory || 'test-results';
+            const outputFilename = this.options.outputFilename || 'url-tracking.json';
+            
+            // Create directory if needed
+            const fullOutputDir = path.resolve(process.cwd(), outputDir);
+            if (!fs.existsSync(fullOutputDir)) {
+                this.log(`Creating output directory: ${fullOutputDir}`);
+                fs.mkdirSync(fullOutputDir, { recursive: true });
+            }
+            
+            // Define output path
+            const outputPath = this.getTrackingFilePath();
+            this.log(`DELETING tracking file at: ${outputPath}`);
+            
+            // Delete if exists
+            if (fs.existsSync(outputPath)) {
+                try {
+                    fs.unlinkSync(outputPath);
+                    this.log('Tracking file deleted successfully');
+                } catch (e) {
+                    this.log(`Error deleting file: ${e.message}`);
+                    // Try to overwrite instead
+                    fs.writeFileSync(outputPath, '[]', {flag: 'w'});
+                    this.log('File reset via overwrite');
+                }
+            }
+            
+            // Create empty file
+            fs.writeFileSync(outputPath, '[]', 'utf8');
+            this.log('Empty tracking file created');
+            
+            // Mark as completed
+            fileResetCompleted = true;
+            return true;
+        } catch (error) {
+            this.log(`Error resetting tracking file: ${error.message}`);
+            console.error(error);
+            return false;
+        }
+    }
+    
+    /**
+     * Debug method to check if the tracking file exists and what its contents are
+     */
+    debugFileStatus() {
+        try {
+            const outputPath = this.getTrackingFilePath();
+            
+            this.log(`Checking tracking file at: ${outputPath}`);
+            
+            if (fs.existsSync(outputPath)) {
+                this.log('Tracking file exists');
+                const stats = fs.statSync(outputPath);
+                this.log(`File size: ${stats.size} bytes`);
+                
+                try {
+                    const content = fs.readFileSync(outputPath, 'utf8');
+                    this.log(`File content: ${content.substring(0, 100)}${content.length > 100 ? '...' : ''}`);
+                    
+                    try {
+                        const json = JSON.parse(content);
+                        this.log(`Parsed JSON: ${json.length} items`);
+                    } catch (e) {
+                        this.log(`Invalid JSON: ${e.message}`);
+                    }
+                } catch (e) {
+                    this.log(`Error reading file: ${e.message}`);
+                }
+            } else {
+                this.log('Tracking file does not exist');
+            }
+        } catch (error) {
+            this.log(`Error checking file status: ${error.message}`);
+        }
+    }
+    
+    /**
+     * Reset methods for backward compatibility
+     */
+    resetTrackingFile() {
+        return this.forceDeleteTrackingFile();
+    }
+    
+    forceResetTrackingFile() {
+        return this.forceDeleteTrackingFile();
+    }
+    
+    /**
+     * Reset tracking file before a new session starts
+     */
+    resetBeforeNewSession() {
+        this.log('Preparing for new session - resetting file');
+        fileResetCompleted = false;
+        return this.forceDeleteTrackingFile();
+    }
+    
+    /**
+     * Static reset method for service layer
+     */
+    static forceReset() {
+        console.log('[UrlTracker] Static force reset called');
+        fileResetCompleted = false;
+        
+        try {
+            // Use default paths
+            const outputDir = 'test-results';
+            const outputFilename = 'url-tracking.json';
+            const fullOutputDir = path.resolve(process.cwd(), outputDir);
+            
+            // Create directory if needed
+            if (!fs.existsSync(fullOutputDir)) {
+                fs.mkdirSync(fullOutputDir, { recursive: true });
+            }
+            
+            // Delete and recreate file
+            const outputPath = path.resolve(fullOutputDir, outputFilename);
+            
+            if (fs.existsSync(outputPath)) {
+                fs.unlinkSync(outputPath);
+            }
+            
+            fs.writeFileSync(outputPath, '[]', 'utf8');
+            console.log('[UrlTracker] Empty tracking file created by static method');
+            
+            return true;
+        } catch (error) {
+            console.log(`[UrlTracker] Error in static reset: ${error.message}`);
+            return false;
+        }
+    }
+    
+    /**
+     * Public methods to maintain compatibility with existing code
+     */
+    getNavigationHistory() {
+        return this.navigationHistory;
+    }
+
+    clearHistory() {
+        this.navigationHistory = [];
+        this.hasRecordedFinalUrl = false;
+        this.hasSavedReport = false;
     }
 }
 

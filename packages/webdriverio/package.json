@@ -1,7 +1,7 @@
 {
   "name": "@lambdatest/wdio-driver",
   "version": "1.0.6",
-  "description": "WebdriverIO driver for all Lambdatest functionalities",
+  "description": "WebdriverIO driver for all Lambdatest functionalities including URL tracking and SmartUI",
   "main": "index.js",
   "repository": {
     "type": "git",
@@ -17,7 +17,9 @@
   },
   "keywords": [
     "lambdatest",
-    "webdriverio"
+    "webdriverio",
+    "url-tracking",
+    "test-analytics"
   ],
   "author": "LambdaTest <keys@lambdatest.com>",
   "license": "MIT",
