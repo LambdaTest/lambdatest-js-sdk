@@ -1,6 +1,8 @@
 const { EventEmitter } = require('events');
 const fs = require('fs');
 const path = require('path');
+const ApiUploader = require('./api-uploader');
+const { logger } = require('./logger');
 
 class UrlTrackerPlugin extends EventEmitter {
     constructor(page, options = {}) {
@@ -13,16 +15,38 @@ class UrlTrackerPlugin extends EventEmitter {
             trackHashChanges: options.trackHashChanges ?? true,
             testName: options.testName ?? 'unknown',
             specFile: options.specFile ?? 'unknown',
-            preserveHistory: options.preserveHistory ?? true
+            preserveHistory: options.preserveHistory ?? true,
+            // API upload options
+            enableApiUpload: options.enableApiUpload ?? true,
+            apiEndpoint: options.apiEndpoint,
+            username: options.username,
+            accessKey: options.accessKey
         };
+        
+        // DEBUG: Log the actual options being used
+        logger.info(`URL Tracker Constructor Debug:`);
+        logger.info(`  - enableApiUpload: ${this.options.enableApiUpload} (type: ${typeof this.options.enableApiUpload})`);
+        logger.info(`  - enableApiUpload from options: ${options.enableApiUpload} (type: ${typeof options.enableApiUpload})`);
+        logger.info(`  - testName: ${this.options.testName}`);
+        logger.info(`  - specFile: ${this.options.specFile}`);
         
         // Don't use hardcoded spec file names
         if (this.options.specFile === 'unknown') {
-            console.log('Spec file is unknown, will attempt to determine from test metadata');
+            logger.warn('Spec file is unknown, will attempt to determine from test metadata');
         }
         
-        console.log(`Creating URL tracker with RAW options: ${JSON.stringify(options)}`);
-        console.log(`Creating URL tracker with NORMALIZED options: ${JSON.stringify(this.options)}`);
+        // Initialize API uploader if enabled
+        if (this.options.enableApiUpload) {
+            logger.info('API upload is enabled, initializing API uploader...');
+            this.apiUploader = new ApiUploader({
+                apiEndpoint: this.options.apiEndpoint,
+                username: this.options.username,
+                accessKey: this.options.accessKey
+            });
+            logger.info('API uploader initialized successfully');
+        } else {
+            logger.info('API upload is disabled');
+        }
         
         // Initialize properties
         this.navigationHistory = [];
@@ -38,6 +62,8 @@ class UrlTrackerPlugin extends EventEmitter {
         this.metadataFetchAttempts = 0; // Track number of fetch attempts
         this.MAX_METADATA_FETCH_ATTEMPTS = 5; // Maximum retry attempts
         this.lastNavigationType = 'init'; // Track the last navigation type
+        this.cleanupCalled = false; // Track if cleanup has been called
+        this.instanceId = `${this.options.testName}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`; // Unique instance ID
         
         // Define navigation type mapping for more descriptive types
         this.navigationTypeMap = {
@@ -70,13 +96,18 @@ class UrlTrackerPlugin extends EventEmitter {
                 globalObj._activeUrlTrackers = [];
             }
             globalObj._activeUrlTrackers.push(this);
-            console.log(`Registered URL tracker in global list (${globalObj._activeUrlTrackers.length} trackers)`);
         } catch (e) {
-            console.error('Error registering tracker globally:', e);
+            logger.error('Error registering tracker globally:', e);
         }
+        
+        // CRITICAL: Setup automatic cleanup for manual usage
+        this.setupAutomaticCleanup();
         
         // Create initial output files to ensure permissions are correct
         this.ensureOutputFilesExist();
+        
+        // Perform global setup automatically (similar to fixture)
+        this.performInitialSetup();
     }
 
     normalizeUrl(url) {
@@ -163,16 +194,14 @@ class UrlTrackerPlugin extends EventEmitter {
         this.trackingResults = [];
 
         try {
-            console.log(`Initializing URL tracker for test: ${this.options.testName || 'unknown'}`);
+            logger.info(`Initializing URL tracker for test: ${this.options.testName}`);
             
             // CRITICAL: Fetch test metadata first - this must happen for every test session
-            console.log('FETCHING TEST METADATA AT SESSION START - REQUIRED FOR EVERY TEST SESSION');
             await this.fetchTestMetadataWithRetry();
             
             // Wait for the page to be ready
             await this.page.waitForLoadState('domcontentloaded').catch(() => {
                 // Ignore timeouts or navigation errors
-                console.log('Warning: Failed to wait for dom content loaded');
             });
 
             // Get and normalize the initial URL 
@@ -183,7 +212,6 @@ class UrlTrackerPlugin extends EventEmitter {
             }
             
             const currentUrl = this.normalizeUrl(pageUrl);
-            console.log(`Initial URL: ${currentUrl}`);
             
             // Only record the initial URL if it's not 'null'
             if (currentUrl !== 'null') {
@@ -202,10 +230,6 @@ class UrlTrackerPlugin extends EventEmitter {
                     timestamp: new Date().toISOString(),
                     navigation_type: 'page_load' // More specific navigation type
                 });
-                
-                console.log(`Added initial URL to history: ${currentUrl}`);
-            } else {
-                console.log('Initial URL is null, skipping recording');
             }
             
             this.lastUrl = currentUrl;
@@ -213,16 +237,9 @@ class UrlTrackerPlugin extends EventEmitter {
 
             await this.setupPageListeners();
             this.isInitialized = true;
-            console.log('URL tracker initialized successfully');
-            
-            // Debug the first tracking result
-            if (this.trackingResults.length > 0) {
-                console.log('First tracking result after init:', JSON.stringify(this.trackingResults[0]));
-            } else {
-                console.warn('No tracking results after initialization!');
-            }
+            logger.info('URL tracker initialized successfully');
         } catch (error) {
-            console.error('Error initializing URL tracker:', error);
+            logger.error('Error initializing URL tracker:', error);
         }
     }
 
@@ -231,8 +248,6 @@ class UrlTrackerPlugin extends EventEmitter {
             return;
         }
 
-        console.log(`Setting up page listeners for test: ${this.options.testName}`);
-
         // Remove any existing listeners first
         this.page.removeAllListeners('framenavigated');
 
@@ -240,7 +255,6 @@ class UrlTrackerPlugin extends EventEmitter {
         this.page.on('framenavigated', async (frame) => {
             if (frame === this.page.mainFrame()) {
                 const newUrl = this.normalizeUrl(frame.url());
-                console.log(`Navigation detected: ${newUrl} (from ${this.lastUrl})`);
                 
                 if (newUrl !== this.lastUrl && newUrl !== 'null') {
                     const oldUrl = this.lastUrl || 'null';
@@ -282,8 +296,6 @@ class UrlTrackerPlugin extends EventEmitter {
                         }
                         this.emit('urlChange', { oldUrl, newUrl });
                     }
-
-                    console.log(`Adding navigation event to history: ${oldUrl} -> ${newUrl} (${navigationType})`);
                     
                     this.navigationHistory.push({
                         url: newUrl,
@@ -300,10 +312,6 @@ class UrlTrackerPlugin extends EventEmitter {
                         timestamp: new Date().toISOString(),
                         navigation_type: navigation_type
                     });
-                    
-                    console.log(`Added tracking result: ${this.options.testName} - ${navigation_type} from ${oldUrl} to ${newUrl}`);
-                } else if (newUrl === 'null') {
-                    console.log('Navigation to null URL detected, skipping recording');
                 }
             }
         });
@@ -346,12 +354,12 @@ class UrlTrackerPlugin extends EventEmitter {
                         this.lastNavigationType = finalType;
                         this.emit('urlChange', { oldUrl, newUrl });
                     } else if (newUrl === 'null') {
-                        console.log('History change to null URL detected, skipping recording');
+                        logger.info('History change to null URL detected, skipping recording');
                     }
                 });
                 this.isFunctionExposed = true;
             } catch (error) {
-                console.error('Error exposing history change tracking function:', error);
+                logger.error('Error exposing history change tracking function:', error);
             }
         }
 
@@ -364,7 +372,7 @@ class UrlTrackerPlugin extends EventEmitter {
 
                 // Make sure tracking function is available
                 if (typeof window.__trackHistoryChange !== 'function') {
-                    console.error('Tracking function not available');
+                    logger.error('Tracking function not available');
                     return;
                 }
 
@@ -376,7 +384,7 @@ class UrlTrackerPlugin extends EventEmitter {
                     try {
                         window.__trackHistoryChange(window.location.href, 'pushstate');
                     } catch (e) {
-                        console.error('Error tracking pushState:', e);
+                        logger.error('Error tracking pushState:', e);
                     }
                     return result;
                 };
@@ -389,7 +397,7 @@ class UrlTrackerPlugin extends EventEmitter {
                     try {
                         window.__trackHistoryChange(window.location.href, 'replacestate');
                     } catch (e) {
-                        console.error('Error tracking replaceState:', e);
+                        logger.error('Error tracking replaceState:', e);
                     }
                     return result;
                 };
@@ -399,7 +407,7 @@ class UrlTrackerPlugin extends EventEmitter {
                     try {
                         window.__trackHistoryChange(window.location.href, 'hashchange');
                     } catch (e) {
-                        console.error('Error tracking hashchange:', e);
+                        logger.error('Error tracking hashchange:', e);
                     }
                 });
 
@@ -413,7 +421,7 @@ class UrlTrackerPlugin extends EventEmitter {
                             window.__trackHistoryChange(currentUrl, 'popstate');
                         }
                     } catch (e) {
-                        console.error('Error tracking popstate:', e);
+                        logger.error('Error tracking popstate:', e);
                     }
                 });
 
@@ -435,7 +443,7 @@ class UrlTrackerPlugin extends EventEmitter {
                             };
                         }
                     } catch (e) {
-                        console.error('Error tracking link clicks:', e);
+                        logger.error('Error tracking link clicks:', e);
                     }
                 }, true);
                 
@@ -448,7 +456,7 @@ class UrlTrackerPlugin extends EventEmitter {
                             action: event.target.action || window.location.href
                         };
                     } catch (e) {
-                        console.error('Error tracking form submission:', e);
+                        logger.error('Error tracking form submission:', e);
                     }
                 }, true);
 
@@ -456,17 +464,17 @@ class UrlTrackerPlugin extends EventEmitter {
                 try {
                     window.__trackHistoryChange(window.location.href, 'navigation');
                 } catch (e) {
-                    console.error('Error tracking initial page:', e);
+                    logger.error('Error tracking initial page:', e);
                 }
             }).catch((error) => {
-                console.error('Error adding init script:', error);
+                logger.error('Error adding init script:', error);
             });
             
             // Intercept Playwright navigation methods
             this.setupPlaywrightMethodInterception();
             
         } catch (error) {
-            console.error('Error setting up page listeners:', error);
+            logger.error('Error setting up page listeners:', error);
         }
     }
     
@@ -476,7 +484,6 @@ class UrlTrackerPlugin extends EventEmitter {
             // Intercept page.goBack
             const originalGoBack = this.page.goBack;
             this.page.goBack = async (...args) => {
-                console.log('Intercepted page.goBack()');
                 this.lastNavigationType = 'back_pending';
                 return await originalGoBack.apply(this.page, args);
             };
@@ -484,7 +491,6 @@ class UrlTrackerPlugin extends EventEmitter {
             // Intercept page.goForward
             const originalGoForward = this.page.goForward;
             this.page.goForward = async (...args) => {
-                console.log('Intercepted page.goForward()');
                 this.lastNavigationType = 'forward_pending';
                 return await originalGoForward.apply(this.page, args);
             };
@@ -492,7 +498,6 @@ class UrlTrackerPlugin extends EventEmitter {
             // Intercept page.reload
             const originalReload = this.page.reload;
             this.page.reload = async (...args) => {
-                console.log('Intercepted page.reload()');
                 this.lastNavigationType = 'reload_pending';
                 const oldUrl = this.lastUrl || 'null';
                 
@@ -512,8 +517,6 @@ class UrlTrackerPlugin extends EventEmitter {
             // Intercept page.click with option to detect link clicks
             const originalClick = this.page.click;
             this.page.click = async (selector, options) => {
-                console.log(`Intercepted page.click(${selector})`);
-                
                 // Check if this is likely a link click
                 try {
                     const isLink = await this.page.evaluate((sel) => {
@@ -535,7 +538,6 @@ class UrlTrackerPlugin extends EventEmitter {
                     }, selector);
                     
                     if (isLink) {
-                        console.log(`Detected click on link: ${isLink.href}`);
                         this.lastNavigationType = 'click';
                         
                         // Record the click intent
@@ -550,15 +552,14 @@ class UrlTrackerPlugin extends EventEmitter {
                         });
                     }
                 } catch (e) {
-                    console.log('Error detecting if click target is a link:', e);
+                    // Ignore errors in link detection
                 }
                 
                 return await originalClick.apply(this.page, [selector, options]);
             };
             
-            console.log('Successfully intercepted Playwright navigation methods');
         } catch (e) {
-            console.error('Error setting up Playwright method interception:', e);
+            logger.error('Error setting up Playwright method interception:', e);
         }
     }
 
@@ -583,6 +584,11 @@ class UrlTrackerPlugin extends EventEmitter {
     }
 
     async destroy() {
+        // If cleanup hasn't been called yet, call it first
+        if (!this.cleanupCalled) {
+            await this.cleanup();
+        }
+        
         this.page.removeAllListeners('framenavigated');
         if (!this.preserveHistory) {
             this.navigationHistory = [];
@@ -590,23 +596,59 @@ class UrlTrackerPlugin extends EventEmitter {
         }
         this.isInitialized = false;
         this.isFunctionExposed = false;
+        
+        // Clear cleanup timeout if it exists
+        if (this.cleanupTimeout) {
+            clearTimeout(this.cleanupTimeout);
+            this.cleanupTimeout = null;
+        }
+        
+        // Remove from global registry
+        if (global._urlTrackerRegistry && global._urlTrackerRegistry.trackers) {
+            global._urlTrackerRegistry.trackers.delete(this.instanceId);
+        }
     }
 
     async cleanup() {
-        console.log(`Cleaning up URL tracker for test: ${this.options.testName}`);
-        console.log(`Test name: ${this.options.testName}, Spec file: ${this.options.specFile}`);
-        console.log(`Found ${this.trackingResults.length} tracking results to export`);
+        // Prevent duplicate cleanup
+        if (this.cleanupCalled) {
+            logger.info(`Cleanup already called for test: ${this.options.testName}, skipping`);
+            return;
+        }
+        
+        this.cleanupCalled = true; // Mark as cleaned up
+        
+        logger.info(`=== CLEANUP DEBUG START ===`);
+        logger.info(`Cleaning up URL tracker for test: ${this.options.testName}`);
+        logger.info(`API upload enabled: ${this.options.enableApiUpload} (type: ${typeof this.options.enableApiUpload})`);
+        logger.info(`API uploader exists: ${!!this.apiUploader}`);
+        logger.info(`Tracking results count: ${this.trackingResults ? this.trackingResults.length : 0}`);
+        
+        // DEBUG: Log the actual tracking results
+        if (this.trackingResults && this.trackingResults.length > 0) {
+            logger.info(`Sample tracking result: ${JSON.stringify(this.trackingResults[0], null, 2)}`);
+        }
+        
+        // DEBUG: Add global tracking for cleanup calls
+        if (!global._urlTrackerCleanupCalls) {
+            global._urlTrackerCleanupCalls = [];
+        }
+        global._urlTrackerCleanupCalls.push({
+            testName: this.options.testName,
+            timestamp: new Date().toISOString(),
+            apiUploadEnabled: this.options.enableApiUpload,
+            hasApiUploader: !!this.apiUploader,
+            trackingResultsCount: this.trackingResults ? this.trackingResults.length : 0
+        });
         
         // Make final attempt to fetch metadata if we don't have it
         if (!this.testMetadata) {
-            console.log('Final attempt to fetch test metadata during cleanup...');
             await this.fetchTestMetadataWithRetry();
         }
         
         // Ensure spec file is properly set for all results
         if (this.options.specFile && this.options.specFile !== 'unknown' && 
             this.options.specFile !== 'Unable to determine spec file') {
-            console.log(`Ensuring all tracking results use spec file: ${this.options.specFile}`);
             if (this.trackingResults && this.trackingResults.length > 0) {
                 this.trackingResults.forEach(result => {
                     result.spec_file = this.options.specFile;
@@ -614,13 +656,9 @@ class UrlTrackerPlugin extends EventEmitter {
             }
         }
         
-        // Debug output of tracking results
-        if (this.trackingResults.length > 0) {
-            console.log(`Tracking results for ${this.options.testName}:`, JSON.stringify(this.trackingResults, null, 2));
-        } else {
             // If no results, record the current page URL as a final result
+        if (!this.trackingResults || this.trackingResults.length === 0) {
             try {
-                console.log('No tracking results found. Attempting to record final page URL.');
                 const currentUrl = this.normalizeUrl(this.page.url());
                 if (currentUrl !== 'null' && currentUrl !== 'about:blank') {
                     this.addTrackingResult({
@@ -631,24 +669,79 @@ class UrlTrackerPlugin extends EventEmitter {
                         timestamp: new Date().toISOString(),
                         navigation_type: 'final'
                     });
-                    console.log(`Added final URL as tracking result: ${currentUrl}`);
                 }
             } catch (e) {
-                console.error('Error recording final URL:', e);
+                logger.error('Error recording final URL:', e);
             }
         }
         
-        // Before cleanup, export the results
+        // DEBUG: Check all conditions for API upload
+        logger.info(`=== API UPLOAD CONDITIONS CHECK ===`);
+        logger.info(`1. enableApiUpload: ${this.options.enableApiUpload}`);
+        logger.info(`2. apiUploader exists: ${!!this.apiUploader}`);
+        logger.info(`3. trackingResults.length > 0: ${this.trackingResults && this.trackingResults.length > 0}`);
+        logger.info(`4. All conditions met: ${this.options.enableApiUpload && this.apiUploader && this.trackingResults.length > 0}`);
+        
+        // NEW: Upload tracking results to API before file export
+        if (this.options.enableApiUpload && this.apiUploader && this.trackingResults.length > 0) {
+            try {
+                logger.info('Starting API upload...');
+                logger.info(`Uploading ${this.trackingResults.length} tracking results`);
+                
+                // Validate tracking data
+                const trackingData = { navigations: this.trackingResults };
+                if (ApiUploader.validateTrackingData(trackingData)) {
+                    // Extract test ID
+                    const testId = ApiUploader.extractTestId(this.testMetadata, this.options);
+                    logger.info(`Using test ID: ${testId}`);
+                    
+                    // Upload to API
+                    const response = await this.apiUploader.uploadTrackingResults(trackingData, testId);
+                    logger.success('API upload completed successfully');
+                    
+                    // Store the success for later reporting
+                    if (!global._urlTrackerApiSuccesses) {
+                        global._urlTrackerApiSuccesses = [];
+                    }
+                    global._urlTrackerApiSuccesses.push({
+                        testName: this.options.testName,
+                        testId: testId,
+                        timestamp: new Date().toISOString()
+                    });
+                    logger.info(`Stored API success in global._urlTrackerApiSuccesses (now has ${global._urlTrackerApiSuccesses.length} entries)`);
+                } else {
+                    throw new Error('Invalid tracking data - cannot upload to API');
+                }
+            } catch (error) {
+                logger.error(`API upload failed: ${error.message}`);
+                // Store the error for later reporting
+                if (!global._urlTrackerApiErrors) {
+                    global._urlTrackerApiErrors = [];
+                }
+                global._urlTrackerApiErrors.push({
+                    testName: this.options.testName,
+                    error: error.message,
+                    timestamp: new Date().toISOString()
+                });
+                logger.info(`Stored API error in global._urlTrackerApiErrors (now has ${global._urlTrackerApiErrors.length} entries)`);
+                // Continue with cleanup even if API upload fails
+            }
+        } else {
+            logger.info('API upload skipped:');
+            logger.info(`  - API upload enabled: ${this.options.enableApiUpload}`);
+            logger.info(`  - API uploader exists: ${!!this.apiUploader}`);
+            logger.info(`  - Tracking results count: ${this.trackingResults ? this.trackingResults.length : 0}`);
+        }
+        
+        logger.info(`=== CLEANUP DEBUG END ===`);
+        
+        // Before cleanup, export the results to file (existing functionality)
         this.exportResults();
         this.preserveHistory = true;
         await this.destroy();
     }
 
     exportResults(outputPath = null) {
-        // Debug spec file right at the beginning
-        console.log(`Beginning export with options: ${JSON.stringify(this.options)}`);
-        console.log(`Current spec file is: ${this.options.specFile}`);
-        
         // CRITICAL: Extract spec file from metadata if available
         let metadataSpecFile = null;
         if (this.testMetadata && this.testMetadata.data && this.testMetadata.data.name) {
@@ -656,24 +749,19 @@ class UrlTrackerPlugin extends EventEmitter {
             const specFileMatch = testName.match(/\s-\s(.+\.spec\.js)$/);
             if (specFileMatch && specFileMatch[1]) {
                 metadataSpecFile = specFileMatch[1];
-                console.log(`Using spec file from metadata: ${metadataSpecFile}`);
                 
                 // Override the spec file in options
                 if (this.options.specFile !== metadataSpecFile) {
-                    console.log(`Overriding spec file from ${this.options.specFile} to ${metadataSpecFile}`);
                     this.options.specFile = metadataSpecFile;
                 }
             } else {
-                console.log(`Could not extract spec file from metadata name: ${testName}`);
                 // Fallback: try to extract any filename that ends with .spec.js
                 const fallbackMatch = testName.match(/([^\s]+\.spec\.js)/);
                 if (fallbackMatch && fallbackMatch[1]) {
                     metadataSpecFile = fallbackMatch[1];
-                    console.log(`Extracted spec file using fallback method: ${metadataSpecFile}`);
                     
                     // Override the spec file in options
                     if (this.options.specFile !== metadataSpecFile) {
-                        console.log(`Overriding spec file from ${this.options.specFile} to ${metadataSpecFile}`);
                         this.options.specFile = metadataSpecFile;
                     }
                 }
@@ -684,11 +772,9 @@ class UrlTrackerPlugin extends EventEmitter {
         if (this.trackingResults && this.trackingResults.length > 0) {
             // Ensure all tracking results use the current spec file
             const currentSpecFile = metadataSpecFile || this.options.specFile;
-            console.log(`Updating all tracking results to use spec file: ${currentSpecFile}`);
             
             this.trackingResults.forEach(result => {
                 if (result.spec_file !== currentSpecFile) {
-                    console.log(`Updating result spec file from '${result.spec_file}' to '${currentSpecFile}'`);
                     result.spec_file = currentSpecFile;
                 }
             });
@@ -696,22 +782,15 @@ class UrlTrackerPlugin extends EventEmitter {
         
         // Force fix our tracking results one more time before export
         if (this.trackingResults && this.trackingResults.length > 0) {
-            console.log(`Checking ${this.trackingResults.length} results before export`);
-            
             // Count how many have unknown spec file
             const unknownCount = this.trackingResults.filter(r => r.spec_file === 'unknown').length;
             if (unknownCount > 0) {
-                console.log(`WARNING: Found ${unknownCount} results with 'unknown' spec file, fixing...`);
-                
                 // Fix all unknown spec files
                 this.trackingResults.forEach(result => {
                     if (result.spec_file === 'unknown') {
-                        console.log(`Fixing result with unknown spec file: ${JSON.stringify(result)}`);
                         result.spec_file = metadataSpecFile || "Unable to determine spec file";
                     }
                 });
-            } else {
-                console.log('All results have proper spec files');
             }
         }
         
@@ -720,16 +799,12 @@ class UrlTrackerPlugin extends EventEmitter {
         
         // Make sure we have tracking results
         if (!this.trackingResults || this.trackingResults.length === 0) {
-            console.log('No results to export - considering creating fallback tracking result');
-            
             // Only create a fallback if we're sure we need it
             try {
                 const currentUrl = this.normalizeUrl(this.page.url());
                 
                 // Check if the URL is valid and worth recording
                 if (currentUrl !== 'null' && currentUrl !== 'about:blank') {
-                    console.log(`Creating fallback for valid URL: ${currentUrl}`);
-                    
                     this.addTrackingResult({
                         spec_file: this.options.specFile,
                         test_name: this.options.testName,
@@ -738,16 +813,12 @@ class UrlTrackerPlugin extends EventEmitter {
                         timestamp: new Date().toISOString(),
                         navigation_type: 'fallback'
                     });
-                    console.log(`Added fallback tracking result for URL: ${currentUrl}`);
-                } else {
-                    console.log(`Not creating fallback for invalid URL: ${currentUrl}`);
                 }
             } catch (e) {
-                console.error('Failed to add fallback tracking result:', e);
+                logger.error('Failed to add fallback tracking result:', e);
                 
                 // Only add a dummy result if absolutely necessary
                 if (!this.trackingResults || this.trackingResults.length === 0) {
-                    console.log('Adding dummy result as last resort');
                     this.trackingResults.push({
                         spec_file: this.options.specFile,
                         test_name: this.options.testName,
@@ -762,7 +833,6 @@ class UrlTrackerPlugin extends EventEmitter {
         
         // Only continue with export if we actually have results
         if (!this.trackingResults || this.trackingResults.length === 0) {
-            console.log('No results to export, skipping file operations');
             return;
         }
         
@@ -776,15 +846,13 @@ class UrlTrackerPlugin extends EventEmitter {
                 if (!fs.existsSync(dir)) {
                     try {
                         fs.mkdirSync(dir, { recursive: true, mode: 0o777 });
-                        console.log(`Created directory: ${dir}`);
                     } catch (err) {
-                        console.error(`Failed to create directory ${dir}:`, err);
+                        logger.error(`Failed to create directory ${dir}:`, err);
                         // Try with different approach for Windows
                         try {
                             require('child_process').execSync(`mkdir -p "${dir}"`);
-                            console.log(`Created directory using command: ${dir}`);
                         } catch (cmdErr) {
-                            console.error(`Failed to create directory using command ${dir}:`, cmdErr);
+                            logger.error(`Failed to create directory using command ${dir}:`, cmdErr);
                         }
                     }
                 }
@@ -795,19 +863,14 @@ class UrlTrackerPlugin extends EventEmitter {
         } else {
             outputPaths.push(outputPath);
         }
-        
-        console.log(`Preparing to export ${this.trackingResults.length} tracking results to ${outputPaths.length} paths`);
 
         // Export to all output paths
         outputPaths.forEach(outputPath => {
             try {
-                console.log(`Exporting to: ${outputPath}`);
-                
                 // Ensure the directory exists with full permissions
                 const outputDir = path.dirname(outputPath);
                 if (!fs.existsSync(outputDir)) {
                     fs.mkdirSync(outputDir, { recursive: true, mode: 0o777 });
-                    console.log(`Created directory: ${outputDir}`);
                 }
 
                 // Create current session data structure
@@ -845,16 +908,16 @@ class UrlTrackerPlugin extends EventEmitter {
                                     allSessions = [existingData];
                                 } else {
                                     // Unknown format
-                                    console.error('Existing file is in an unknown format, creating a new one');
+                                    logger.error('Existing file is in an unknown format, creating a new one');
                                     shouldCreateNewFile = true;
                                 }
                             } catch (parseError) {
-                                console.error('Error parsing existing results file, creating a new one:', parseError);
+                                logger.error('Error parsing existing results file, creating a new one:', parseError);
                                 shouldCreateNewFile = true;
                             }
                         }
                     } catch (readError) {
-                        console.error('Error reading results file, creating a new one:', readError);
+                        logger.error('Error reading results file, creating a new one:', readError);
                         shouldCreateNewFile = true;
                     }
                 } else {
@@ -872,20 +935,18 @@ class UrlTrackerPlugin extends EventEmitter {
                         }
                         
                         fs.writeFileSync(outputPath, '[]', { encoding: 'utf8', mode: 0o666 });
-                        console.log(`Created new empty results file: ${outputPath}`);
                         allSessions = [];
                     } catch (createError) {
-                        console.error(`Error creating new results file ${outputPath}:`, createError);
+                        logger.error(`Error creating new results file ${outputPath}:`, createError);
                         
                         // Try writing to current directory as a fallback
                         const fallbackPath = path.join(process.cwd(), 'url-tracking-results.json');
                         try {
                             fs.writeFileSync(fallbackPath, '[]', { encoding: 'utf8' });
-                            console.log(`Created fallback file in current directory: ${fallbackPath}`);
                             outputPath = fallbackPath; // Update the path for further operations
                             allSessions = [];
                         } catch (fallbackErr) {
-                            console.error('Failed to create fallback file in current directory:', fallbackErr);
+                            logger.error('Failed to create fallback file in current directory:', fallbackErr);
                         }
                     }
                 }
@@ -897,7 +958,6 @@ class UrlTrackerPlugin extends EventEmitter {
                     // Update spec file for all sessions with matching test name
                     if (session.metadata && session.metadata.name === testName) {
                         if (session.spec_file !== currentSpecFile) {
-                            console.log(`Updating existing session spec file from '${session.spec_file}' to '${currentSpecFile}'`);
                             session.spec_file = currentSpecFile;
                         }
                         
@@ -921,15 +981,11 @@ class UrlTrackerPlugin extends EventEmitter {
                 );
 
                 if (existingSessionIndex >= 0) {
-                    console.log(`Found existing session with ID ${sessionId}, updating instead of adding new entry`);
                     allSessions[existingSessionIndex] = currentSessionData;
                 } else {
                     // Add current session to all sessions
                     allSessions.push(currentSessionData);
-                    console.log(`Adding new session with ID ${sessionId} to results file`);
                 }
-
-                console.log(`File now contains ${allSessions.length} test sessions`);
 
                 // Set file permissions to ensure it's writable
                 try {
@@ -937,74 +993,42 @@ class UrlTrackerPlugin extends EventEmitter {
                         fs.chmodSync(outputPath, 0o666); // Make sure file is readable and writable
                     }
                 } catch (permError) {
-                    console.error(`Error setting permissions on ${outputPath}:`, permError);
+                    logger.error(`Error setting permissions on ${outputPath}:`, permError);
                 }
 
                 // Write the results to the file using multiple methods to ensure success
                 try {
                     // First try with standard fs.writeFileSync
                     fs.writeFileSync(outputPath, JSON.stringify(allSessions, null, 2), { encoding: 'utf8', mode: 0o666 });
-                    console.log(`URL tracking results (${allSessions.length} sessions) saved to: ${outputPath}`);
+                    // Remove the excessive logging - only log once per test, not per file
+                    if (outputPath.includes('tests-results')) {
+                        logger.debug(`URL tracking results saved to: ${outputPath}`, true);
+                    }
                 } catch (writeError) {
-                    console.error(`Error writing to ${outputPath} with writeFileSync:`, writeError);
+                    logger.error(`Error writing to ${outputPath} with writeFileSync:`, writeError);
                     
                     // Try alternate method with fs.writeFile
                     try {
                         fs.writeFile(outputPath, JSON.stringify(allSessions, null, 2), { encoding: 'utf8', mode: 0o666 }, (err) => {
                             if (err) {
-                                console.error(`Error writing to ${outputPath} with writeFile:`, err);
-                            } else {
-                                console.log(`URL tracking results (${allSessions.length} sessions) saved to ${outputPath} with writeFile`);
+                                logger.error(`Error writing to ${outputPath} with writeFile:`, err);
                             }
                         });
                     } catch (writeError2) {
-                        console.error(`Error writing to ${outputPath} with writeFile:`, writeError2);
+                        logger.error(`Error writing to ${outputPath} with writeFile:`, writeError2);
                     }
                     
                     // Try writing to current directory as a last resort
                     const emergencyPath = path.join(process.cwd(), 'url-tracking-emergency.json');
                     try {
                         fs.writeFileSync(emergencyPath, JSON.stringify(allSessions, null, 2), { encoding: 'utf8' });
-                        console.log(`Emergency backup saved to ${emergencyPath}`);
+                        logger.info(`Emergency backup saved to ${emergencyPath}`);
                     } catch (emergencyError) {
-                        console.error(`Failed to create emergency file ${emergencyPath}:`, emergencyError);
+                        logger.error(`Failed to create emergency file ${emergencyPath}:`, emergencyError);
                     }
-                }
-                
-                // Verify the file was written correctly
-                try {
-                    if (fs.existsSync(outputPath)) {
-                        const content = fs.readFileSync(outputPath, 'utf-8');
-                        let savedData = [];
-                        
-                        try {
-                            savedData = JSON.parse(content);
-                            console.log(`Verification: Found ${savedData.length} sessions in file`);
-                            
-                            if (savedData.length > 0) {
-                                console.log('First saved session in file has', 
-                                    savedData[0].navigations ? savedData[0].navigations.length : 0, 
-                                    'navigation entries');
-                                console.log('First saved session spec file:', 
-                                    savedData[0].spec_file || 'not found');
-                            } else {
-                                console.error('ERROR: File was written but contains empty sessions array!');
-                                // Emergency fix - write our session directly again
-                                const emergencyPath = path.join(process.cwd(), 'url-tracking-emergency.json');
-                                fs.writeFileSync(emergencyPath, JSON.stringify([currentSessionData], null, 2), { encoding: 'utf8' });
-                                console.log(`Emergency rewrite saved to ${emergencyPath}`);
-                            }
-                        } catch (parseError) {
-                            console.error('Error parsing verification file:', parseError);
-                        }
-                    } else {
-                        console.error(`File doesn't exist after writing: ${outputPath}`);
-                    }
-                } catch (e) {
-                    console.error('Error verifying saved results:', e);
                 }
             } catch (error) {
-                console.error('Error exporting URL tracking results:', error);
+                logger.error('Error exporting URL tracking results:', error);
                 
                 // Last resort - try to write just the current session to a backup file
                 try {
@@ -1016,21 +1040,16 @@ class UrlTrackerPlugin extends EventEmitter {
                         spec_file: this.options.specFile
                     };
                     fs.writeFileSync(backupPath, JSON.stringify([currentSessionData], null, 2), { encoding: 'utf8' });
-                    console.log(`Backup results saved to ${backupPath}`);
-                    
-                    // Verify the backup was written
-                    const backupContent = fs.readFileSync(backupPath, 'utf-8');
-                    const backupData = JSON.parse(backupContent);
-                    console.log(`Backup verification: Found ${backupData.length} sessions in backup file`);
+                    logger.info(`Backup results saved to ${backupPath}`);
                 } catch (backupError) {
-                    console.error('Failed to create backup results file:', backupError);
+                    logger.error('Failed to create backup results file:', backupError);
                 }
             }
         });
     }
 
     getTrackingResults() {
-        console.log(`Getting ${this.trackingResults.length} tracking results for test: ${this.options.testName || 'unknown'}`);
+        logger.info(`Getting ${this.trackingResults.length} tracking results for test: ${this.options.testName || 'unknown'}`);
         return [...this.trackingResults];
     }
 
@@ -1051,22 +1070,17 @@ class UrlTrackerPlugin extends EventEmitter {
     addTrackingResult(result) {
         // Validate required fields first
         if (!result) {
-            console.error('Attempted to add null or undefined tracking result');
+            logger.error('Attempted to add null or undefined tracking result');
             return;
         }
         
-        // Debug the incoming result
-        console.log(`Adding tracking result: ${JSON.stringify(result)}`);
-        
         // Skip results with null URLs
         if (result.current_url === 'null' || result.current_url === null) {
-            console.log('Skipping result with null URL');
             return;
         }
         
         // IMPORTANT: Always use the spec file from options, which may have been updated from metadata
         const targetSpecFile = this.options.specFile;
-        console.log(`Using spec file from options: ${targetSpecFile}`);
         
         // Map navigation type if possible
         let navigation_type = result.navigation_type || 'navigation';
@@ -1090,7 +1104,6 @@ class UrlTrackerPlugin extends EventEmitter {
                 timestamp: result.timestamp || new Date().toISOString(),
                 navigation_type: navigation_type
             };
-            console.log(`Converted old format to new format: ${JSON.stringify(finalResult)}`);
         } else {
             // Already in new format or unknown format
             finalResult = {
@@ -1102,20 +1115,15 @@ class UrlTrackerPlugin extends EventEmitter {
                 timestamp: result.timestamp || new Date().toISOString(),
                 navigation_type: navigation_type
             };
-            console.log(`Normalized result: ${JSON.stringify(finalResult)}`);
         }
         
         // Check again after normalization to ensure we're not adding null URLs
         if (finalResult.current_url === 'null') {
-            console.log('Skipping normalized result with null URL');
             return;
         }
         
         // Add the result to the array
         this.trackingResults.push(finalResult);
-        
-        // Debug current tracking results count
-        console.log(`Current tracking results count: ${this.trackingResults.length}`);
         
         // Write results to file immediately after each addition to prevent data loss
         this.saveResultsToFile();
@@ -1130,10 +1138,9 @@ class UrlTrackerPlugin extends EventEmitter {
             // If we have results to save, save them now to prevent data loss
             if (this.trackingResults && this.trackingResults.length > 0) {
                 this.exportResults();
-                console.log(`Saved ${this.trackingResults.length} tracking results immediately after addition`);
             }
         } catch (e) {
-            console.error('Error in saveResultsToFile:', e);
+            logger.error('Error in saveResultsToFile:', e);
         }
     }
 
@@ -1148,16 +1155,14 @@ class UrlTrackerPlugin extends EventEmitter {
                 if (!fs.existsSync(dir)) {
                     try {
                         fs.mkdirSync(dir, { recursive: true, mode: 0o777 });
-                        console.log(`Created directory: ${dir}`);
                     } catch (err) {
-                        console.error(`Failed to create directory ${dir}:`, err);
+                        logger.error(`Failed to create directory ${dir}:`, err);
                         // Try different approaches
                         try {
                             // Try mkdir directly if mkdirSync failed
                             require('child_process').execSync(`mkdir -p "${dir}"`);
-                            console.log(`Created directory using command: ${dir}`);
                         } catch (cmdErr) {
-                            console.error(`Failed to create directory using command ${dir}:`, cmdErr);
+                            logger.error(`Failed to create directory using command ${dir}:`, cmdErr);
                         }
                     }
                 }
@@ -1167,41 +1172,36 @@ class UrlTrackerPlugin extends EventEmitter {
                 if (!fs.existsSync(testFilePath)) {
                     try {
                         fs.writeFileSync(testFilePath, '[]', { encoding: 'utf8', mode: 0o666 });
-                        console.log(`Created initial tracking file: ${testFilePath}`);
                         
                         // Test read
                         const content = fs.readFileSync(testFilePath, 'utf-8');
-                        console.log(`Successfully read from ${testFilePath}: ${content.substring(0, 20)}`);
                     } catch (e) {
-                        console.error(`Error creating test file ${testFilePath}:`, e);
+                        logger.error(`Error creating test file ${testFilePath}:`, e);
                         
                         // Try with current directory as fallback
                         try {
                             const fallbackPath = path.join(process.cwd(), 'url-tracking-results.json');
                             fs.writeFileSync(fallbackPath, '[]', { encoding: 'utf8' });
-                            console.log(`Created fallback file in current directory: ${fallbackPath}`);
                         } catch (fallbackErr) {
-                            console.error('Failed to create fallback file in current directory:', fallbackErr);
+                            logger.error('Failed to create fallback file in current directory:', fallbackErr);
                         }
                     }
                 } else {
                     // Test if the file is readable/writable
                     try {
                         fs.accessSync(testFilePath, fs.constants.R_OK | fs.constants.W_OK);
-                        console.log(`Verified read/write access to ${testFilePath}`);
                     } catch (accessErr) {
-                        console.error(`Cannot access ${testFilePath}:`, accessErr);
+                        logger.error(`Cannot access ${testFilePath}:`, accessErr);
                         try {
                             fs.chmodSync(testFilePath, 0o666);
-                            console.log(`Updated permissions for ${testFilePath}`);
                         } catch (chmodErr) {
-                            console.error(`Failed to update permissions for ${testFilePath}:`, chmodErr);
+                            logger.error(`Failed to update permissions for ${testFilePath}:`, chmodErr);
                         }
                     }
                 }
             });
         } catch (e) {
-            console.error('Error in ensureOutputFilesExist:', e);
+            logger.error('Error in ensureOutputFilesExist:', e);
         }
     }
 
@@ -1209,41 +1209,33 @@ class UrlTrackerPlugin extends EventEmitter {
     async fetchTestMetadata() {
         try {
             this.metadataFetchAttempts++;
-            console.log(`Fetching test details from LambdaTest (attempt ${this.metadataFetchAttempts})...`);
             const response = JSON.parse(await this.page.evaluate(_ => {}, `lambdatest_action: ${JSON.stringify({ action: 'getTestDetails' })}`));
             
-            console.log('Received test metadata:', JSON.stringify(response));
             this.testMetadata = response;
             
             // IMPORTANT: Extract spec file name directly from metadata
             if (response && response.data && response.data.name) {
                 const testName = response.data.name;
-                console.log(`Test name from metadata: ${testName}`);
                 
                 // Check if the test name contains a spec file reference
                 const specFileMatch = testName.match(/\s-\s(.+\.spec\.js)$/);
                 if (specFileMatch && specFileMatch[1]) {
                     const metadataSpecFile = specFileMatch[1];
-                    console.log(`Extracted spec file from metadata: ${metadataSpecFile}`);
                     
                     // Update the spec file in our options
                     this.options.specFile = metadataSpecFile;
-                    console.log(`Updated spec file from metadata: ${this.options.specFile}`);
                     
                     // Update all existing tracking results
                     if (this.trackingResults && this.trackingResults.length > 0) {
-                        console.log(`Updating spec file in ${this.trackingResults.length} existing tracking results`);
                         this.trackingResults.forEach(result => {
                             result.spec_file = metadataSpecFile;
                         });
                     }
                 } else {
-                    console.log(`Could not extract spec file from metadata name: ${testName}`);
                     // Fallback: try to extract any filename that ends with .spec.js
                     const fallbackMatch = testName.match(/([^\s]+\.spec\.js)/);
                     if (fallbackMatch && fallbackMatch[1]) {
                         const fallbackSpecFile = fallbackMatch[1];
-                        console.log(`Extracted spec file using fallback method: ${fallbackSpecFile}`);
                         this.options.specFile = fallbackSpecFile;
                         
                         // Update all existing tracking results
@@ -1258,7 +1250,7 @@ class UrlTrackerPlugin extends EventEmitter {
             
             return response;
         } catch (error) {
-            console.error(`Error fetching test metadata (attempt ${this.metadataFetchAttempts}):`, error);
+            logger.error(`Error fetching test metadata (attempt ${this.metadataFetchAttempts}):`, error);
             return null;
         }
     }
@@ -1275,8 +1267,6 @@ class UrlTrackerPlugin extends EventEmitter {
         let retryDelay = 1000; // Start with 1 second delay
         
         while (!metadata && this.metadataFetchAttempts < this.MAX_METADATA_FETCH_ATTEMPTS) {
-            console.log(`Retrying metadata fetch in ${retryDelay}ms (attempt ${this.metadataFetchAttempts + 1}/${this.MAX_METADATA_FETCH_ATTEMPTS})`);
-            
             // Wait before retry
             await new Promise(resolve => setTimeout(resolve, retryDelay));
             
@@ -1288,10 +1278,227 @@ class UrlTrackerPlugin extends EventEmitter {
         }
         
         if (!metadata) {
-            console.error(`Failed to fetch test metadata after ${this.MAX_METADATA_FETCH_ATTEMPTS} attempts!`);
+            logger.error(`Failed to fetch test metadata after ${this.MAX_METADATA_FETCH_ATTEMPTS} attempts!`);
         }
         
         return metadata;
+    }
+
+    // NEW METHOD: Setup automatic cleanup triggers for manual usage
+    setupAutomaticCleanup() {
+        // Register in global registry for cleanup
+        if (!global._urlTrackerRegistry) {
+            global._urlTrackerRegistry = {
+                trackers: new Map(),
+                cleanupHandlersRegistered: false,
+                testEndCallbacks: new Set()
+            };
+        }
+        
+        // Add this instance to the registry
+        global._urlTrackerRegistry.trackers.set(this.instanceId, this);
+        
+        // Setup page event listeners for automatic cleanup
+        if (this.page) {
+            // Listen for page close event
+            this.page.once('close', async () => {
+                logger.info(`Page closed for test ${this.options.testName}, triggering automatic cleanup`);
+                await this.performAutoCleanup();
+            });
+            
+            // Listen for context close event if available
+            try {
+                const context = this.page.context();
+                if (context) {
+                    context.once('close', async () => {
+                        logger.info(`Context closed for test ${this.options.testName}, triggering automatic cleanup`);
+                        await this.performAutoCleanup();
+                    });
+                }
+            } catch (e) {
+                // Context might not be available in all scenarios
+                logger.debug(`Could not attach to context close event: ${e.message}`, true);
+            }
+        }
+        
+        // Register global cleanup handlers if not already registered
+        if (!global._urlTrackerRegistry.cleanupHandlersRegistered) {
+            this.registerGlobalCleanupHandlers();
+        }
+        
+        // Set a timeout-based cleanup as ultimate fallback
+        this.cleanupTimeout = setTimeout(async () => {
+            if (!this.cleanupCalled) {
+                logger.warn(`Timeout-based cleanup triggered for test ${this.options.testName} after 5 minutes`);
+                await this.performAutoCleanup();
+            }
+        }, 300000); // 5 minutes
+    }
+    
+    // NEW METHOD: Register global cleanup handlers once
+    registerGlobalCleanupHandlers() {
+        logger.info('Registering global URL tracker cleanup handlers for manual usage...');
+        
+        // Process exit handler
+        process.on('exit', () => {
+            logger.info('Process exit detected - performing URL tracker cleanup');
+            try {
+                const registry = global._urlTrackerRegistry;
+                if (registry && registry.trackers) {
+                    registry.trackers.forEach((tracker, testName) => {
+                        if (tracker && !tracker.cleanupCalled && typeof tracker.exportResults === 'function') {
+                            tracker.exportResults();
+                        }
+                    });
+                }
+                
+                // Generate API Upload Report
+                generateApiUploadReport();
+                
+            } catch (e) {
+                logger.error('Error during process exit cleanup:', e);
+            }
+        });
+
+        // SIGINT handler (Ctrl+C)
+        process.on('SIGINT', async () => {
+            logger.info('SIGINT received - performing global cleanup');
+            try {
+                const registry = global._urlTrackerRegistry;
+                if (registry && registry.trackers) {
+                    for (const [id, tracker] of registry.trackers) {
+                        if (tracker && !tracker.cleanupCalled) {
+                            await tracker.performAutoCleanup();
+                        }
+                    }
+                }
+                await performGlobalUrlTrackerCleanup();
+            } catch (e) {
+                logger.error('Error during SIGINT cleanup:', e);
+            }
+            process.exit(0);
+        });
+
+        // SIGTERM handler (process termination)
+        process.on('SIGTERM', async () => {
+            logger.info('SIGTERM received - performing global cleanup');
+            try {
+                const registry = global._urlTrackerRegistry;
+                if (registry && registry.trackers) {
+                    for (const [id, tracker] of registry.trackers) {
+                        if (tracker && !tracker.cleanupCalled) {
+                            await tracker.performAutoCleanup();
+                        }
+                    }
+                }
+                await performGlobalUrlTrackerCleanup();
+            } catch (e) {
+                logger.error('Error during SIGTERM cleanup:', e);
+            }
+            process.exit(0);
+        });
+
+        // Uncaught exception handler
+        process.on('uncaughtException', async (err) => {
+            logger.error('Uncaught exception - performing global cleanup:', err);
+            try {
+                const registry = global._urlTrackerRegistry;
+                if (registry && registry.trackers) {
+                    for (const [id, tracker] of registry.trackers) {
+                        if (tracker && !tracker.cleanupCalled) {
+                            await tracker.performAutoCleanup();
+                        }
+                    }
+                }
+                await performGlobalUrlTrackerCleanup();
+            } catch (e) {
+                logger.error('Error during uncaught exception cleanup:', e);
+            }
+            process.exit(1);
+        });
+
+        // Unhandled promise rejection handler
+        process.on('unhandledRejection', async (reason, promise) => {
+            logger.error('Unhandled promise rejection - performing global cleanup:', reason);
+            try {
+                const registry = global._urlTrackerRegistry;
+                if (registry && registry.trackers) {
+                    for (const [id, tracker] of registry.trackers) {
+                        if (tracker && !tracker.cleanupCalled) {
+                            await tracker.performAutoCleanup();
+                        }
+                    }
+                }
+                await performGlobalUrlTrackerCleanup();
+            } catch (e) {
+                logger.error('Error during unhandled rejection cleanup:', e);
+            }
+            process.exit(1);
+        });
+
+        global._urlTrackerRegistry.cleanupHandlersRegistered = true;
+        logger.info('Global URL tracker cleanup handlers registered successfully');
+    }
+    
+    // NEW METHOD: Perform automatic cleanup
+    async performAutoCleanup() {
+        if (this.cleanupCalled) {
+            return; // Already cleaned up
+        }
+        
+        try {
+            logger.info(`Performing automatic cleanup for URL tracker: ${this.options.testName}`);
+            await this.cleanup();
+            
+            // Remove from global registry
+            if (global._urlTrackerRegistry && global._urlTrackerRegistry.trackers) {
+                global._urlTrackerRegistry.trackers.delete(this.instanceId);
+            }
+            
+            // Clear cleanup timeout
+            if (this.cleanupTimeout) {
+                clearTimeout(this.cleanupTimeout);
+                this.cleanupTimeout = null;
+            }
+        } catch (e) {
+            logger.error(`Error in automatic cleanup for ${this.options.testName}:`, e);
+        }
+    }
+
+    // NEW METHOD: Perform initial setup automatically
+    performInitialSetup() {
+        try {
+            // Ensure output directories exist
+            const resultsDir1 = path.join(process.cwd(), 'tests-results');
+            const resultsDir2 = path.join(process.cwd(), 'test-results');
+            
+            [resultsDir1, resultsDir2].forEach(dir => {
+                if (!fs.existsSync(dir)) {
+                    try {
+                        fs.mkdirSync(dir, { recursive: true, mode: 0o777 });
+                    } catch (err) {
+                        logger.error(`URL Tracker: Failed to create directory ${dir}:`, err);
+                        try {
+                            require('child_process').execSync(`mkdir -p "${dir}"`);
+                        } catch (cmdErr) {
+                            logger.error(`URL Tracker: Failed to create directory using command ${dir}:`, cmdErr);
+                        }
+                    }
+                }
+                
+                // Initialize results file if it doesn't exist
+                const resultsFile = path.join(dir, 'url-tracking-results.json');
+                if (!fs.existsSync(resultsFile)) {
+                    try {
+                        fs.writeFileSync(resultsFile, '[]', { encoding: 'utf8', mode: 0o666 });
+                    } catch (writeErr) {
+                        logger.error(`URL Tracker: Failed to create initial results file ${resultsFile}:`, writeErr);
+                    }
+                }
+            });
+        } catch (setupErr) {
+            logger.error('URL Tracker: Error during automatic initial setup:', setupErr);
+        }
     }
 }
 
@@ -1316,28 +1523,157 @@ module.exports = UrlTrackerPlugin;
  * };
  */
 module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(options = {}) {
-    // Don't cache spec file globally - detect it fresh for each test
-    
     // Helper function to detect spec file from command line and environment
     function detectSpecFileFromEnvironment() {
-        // function implementation...
+        try {
+            // Try to get from process.argv
+            const args = process.argv || [];
+            for (let i = 0; i < args.length; i++) {
+                const arg = args[i];
+                if (arg.includes('.spec.js') || arg.includes('.test.js')) {
+                    return path.basename(arg);
+                }
+            }
+            
+            // Try to get from environment variables
+            if (process.env.PLAYWRIGHT_TEST_FILE) {
+                return path.basename(process.env.PLAYWRIGHT_TEST_FILE);
+            }
+            
+            return null;
+        } catch (e) {
+            return null;
+        }
     }
     
     // Helper function to extract test file from stack trace
     function getTestFileFromStack() {
-        // function implementation...
+        try {
+            const stack = new Error().stack;
+            const lines = stack.split('\n');
+            
+            for (const line of lines) {
+                if (line.includes('.spec.js') || line.includes('.test.js')) {
+                    const match = line.match(/([^\/\\]+\.(?:spec|test)\.js)/);
+                    if (match) {
+                        return match[1];
+                    }
+                }
+            }
+            return null;
+        } catch (e) {
+            return null;
+        }
     }
 
     // IMPORTANT: Add function to extract spec file from test name/metadata
     function extractSpecFileFromTestName(testName) {
-        // function implementation...
+        try {
+            if (!testName) return null;
+            
+            // Look for spec file patterns in test name
+            const specFileMatch = testName.match(/([^\/\\]+\.(?:spec|test)\.js)/);
+            if (specFileMatch) {
+                return specFileMatch[1];
+            }
+            
+            return null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    // Detect spec file using multiple methods
+    const specFile = detectSpecFileFromEnvironment() || 
+                     getTestFileFromStack() || 
+                     'unknown.spec.js';
+
+    // Initialize global tracker registry if it doesn't exist
+    if (!global._urlTrackerRegistry) {
+        global._urlTrackerRegistry = {
+            trackers: new Map(),
+            cleanupHandlersRegistered: false,
+            testEndCallbacks: new Set()
+        };
+    }
+
+    // Register global cleanup handlers only once
+    if (!global._urlTrackerRegistry.cleanupHandlersRegistered) {
+        logger.info('Registering global URL tracker cleanup handlers...');
+        
+        // Process exit handler
+        process.on('exit', () => {
+            logger.info('Process exit detected - performing URL tracker cleanup');
+            try {
+                // Use the global cleanup function
+                const registry = global._urlTrackerRegistry;
+                if (registry && registry.trackers) {
+                    registry.trackers.forEach((tracker, testName) => {
+                    if (tracker && typeof tracker.exportResults === 'function') {
+                        tracker.exportResults();
+                    }
+                });
+            }
+                
+                // Generate API Upload Report
+                generateApiUploadReport();
+                
+        } catch (e) {
+                logger.error('Error during process exit cleanup:', e);
+            }
+        });
+
+        // SIGINT handler (Ctrl+C)
+        process.on('SIGINT', async () => {
+            logger.info('SIGINT received - performing global cleanup');
+            try {
+                await performGlobalUrlTrackerCleanup();
+            } catch (e) {
+                logger.error('Error during SIGINT cleanup:', e);
+            }
+            process.exit(0);
+        });
+
+        // SIGTERM handler (process termination)
+        process.on('SIGTERM', async () => {
+            logger.info('SIGTERM received - performing global cleanup');
+            try {
+                await performGlobalUrlTrackerCleanup();
+        } catch (e) {
+                logger.error('Error during SIGTERM cleanup:', e);
+        }
+        process.exit(0);
+    });
+    
+        // Uncaught exception handler
+        process.on('uncaughtException', async (err) => {
+            logger.error('Uncaught exception - performing global cleanup:', err);
+            try {
+                await performGlobalUrlTrackerCleanup();
+            } catch (e) {
+                logger.error('Error during uncaught exception cleanup:', e);
+            }
+            process.exit(1);
+        });
+
+        // Unhandled promise rejection handler
+        process.on('unhandledRejection', async (reason, promise) => {
+            logger.error('Unhandled promise rejection - performing global cleanup:', reason);
+            try {
+                await performGlobalUrlTrackerCleanup();
+        } catch (e) {
+                logger.error('Error during unhandled rejection cleanup:', e);
+        }
+        process.exit(1);
+    });
+
+        global._urlTrackerRegistry.cleanupHandlersRegistered = true;
+        logger.info('Global URL tracker cleanup handlers registered successfully');
     }
 
     // NEW: Perform global setup actions automatically
     // This eliminates the need for users to create a globalSetup file
     (function performGlobalSetup() {
-        console.log('URL Tracker: Performing automatic global setup');
-        
         // Ensure output directories exist
         try {
             const resultsDir1 = path.join(process.cwd(), 'tests-results');
@@ -1347,14 +1683,12 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
                 if (!fs.existsSync(dir)) {
                     try {
                         fs.mkdirSync(dir, { recursive: true, mode: 0o777 });
-                        console.log(`URL Tracker: Created directory ${dir}`);
                     } catch (err) {
-                        console.error(`URL Tracker: Failed to create directory ${dir}:`, err);
+                        logger.error(`URL Tracker: Failed to create directory ${dir}:`, err);
                         try {
                             require('child_process').execSync(`mkdir -p "${dir}"`);
-                            console.log(`URL Tracker: Created directory using command: ${dir}`);
                         } catch (cmdErr) {
-                            console.error(`URL Tracker: Failed to create directory using command ${dir}:`, cmdErr);
+                            logger.error(`URL Tracker: Failed to create directory using command ${dir}:`, cmdErr);
                         }
                     }
                 }
@@ -1364,87 +1698,22 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
                 if (!fs.existsSync(resultsFile)) {
                     try {
                         fs.writeFileSync(resultsFile, '[]', { encoding: 'utf8', mode: 0o666 });
-                        console.log(`URL Tracker: Created initial results file ${resultsFile}`);
                     } catch (writeErr) {
-                        console.error(`URL Tracker: Failed to create initial results file ${resultsFile}:`, writeErr);
+                        logger.error(`URL Tracker: Failed to create initial results file ${resultsFile}:`, writeErr);
                     }
                 }
             });
         } catch (setupErr) {
-            console.error('URL Tracker: Error during automatic global setup:', setupErr);
+            logger.error('URL Tracker: Error during automatic global setup:', setupErr);
         }
     })();
-    
-    // NEW: Add additional process handlers to ensure results are saved
-    // This will work alongside the existing process.on('exit') handler
-    process.on('SIGINT', () => {
-        console.log('URL Tracker: Caught SIGINT signal, saving results before exit');
-        try {
-            const globalObj = global || window || {};
-            if (globalObj._activeUrlTrackers && Array.isArray(globalObj._activeUrlTrackers)) {
-                console.log(`URL Tracker: Found ${globalObj._activeUrlTrackers.length} active trackers to save`);
-                globalObj._activeUrlTrackers.forEach(tracker => {
-                    if (tracker && typeof tracker.exportResults === 'function') {
-                        console.log('URL Tracker: Saving tracker results on SIGINT');
-                        tracker.exportResults();
-                    }
-                });
-            }
-        } catch (e) {
-            console.error('URL Tracker: Error saving results on SIGINT:', e);
-        }
-        process.exit(0);
-    });
-    
-    // Also handle SIGTERM for containerized environments
-    process.on('SIGTERM', () => {
-        console.log('URL Tracker: Caught SIGTERM signal, saving results before exit');
-        try {
-            const globalObj = global || window || {};
-            if (globalObj._activeUrlTrackers && Array.isArray(globalObj._activeUrlTrackers)) {
-                globalObj._activeUrlTrackers.forEach(tracker => {
-                    if (tracker && typeof tracker.exportResults === 'function') {
-                        console.log('URL Tracker: Saving tracker results on SIGTERM');
-                        tracker.exportResults();
-                    }
-                });
-            }
-        } catch (e) {
-            console.error('URL Tracker: Error saving results on SIGTERM:', e);
-        }
-        process.exit(0);
-    });
-    
-    // Handle uncaught exceptions to ensure results are saved
-    process.on('uncaughtException', (err) => {
-        console.error('URL Tracker: Uncaught exception:', err);
-        try {
-            const globalObj = global || window || {};
-            if (globalObj._activeUrlTrackers && Array.isArray(globalObj._activeUrlTrackers)) {
-                globalObj._activeUrlTrackers.forEach(tracker => {
-                    if (tracker && typeof tracker.exportResults === 'function') {
-                        console.log('URL Tracker: Saving tracker results on uncaughtException');
-                        tracker.exportResults();
-                    }
-                });
-            }
-        } catch (e) {
-            console.error('URL Tracker: Error saving results on uncaughtException:', e);
-        }
-        process.exit(1);
-    });
 
     return {
         // Setup a handler that will be executed before each test
         beforeEach: async ({ page }, testInfo) => {
-            console.log(`Creating URL tracker for test: ${testInfo.title}`);
-            
-            // ... existing code to determine specFile ...
-
             // Create a URL tracker with the test name and spec file
             const testName = testInfo.title ? testInfo.title.replace(/\s+/g, '_').toLowerCase() : 'unknown_test';
-            
-            console.log(`Creating URL tracker with exactly this spec file: "${specFile}"`);
+            const uniqueTestId = `${testName}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
             
             const urlTracker = new UrlTrackerPlugin(page, {
                 ...options,
@@ -1452,28 +1721,53 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
                 specFile: specFile  // Force the spec file to be what we detected
             });
 
-            // Store the tracker in the test info
+            // Store the tracker in the test info AND global registry
             testInfo.urlTracker = urlTracker;
+            global._urlTrackerRegistry.trackers.set(uniqueTestId, urlTracker);
             
             try {
                 // Initialize the tracker
                 await urlTracker.init();
-                console.log(`URL tracker initialized for test: ${testName}`);
+                logger.info(`URL tracker initialized for test: ${testName}`);
             } catch (error) {
-                console.error(`Error initializing URL tracker for test ${testName}:`, error);
+                logger.error(`Error initializing URL tracker for test ${testName}:`, error);
             }
             
-            // Add a cleanup handler that is equivalent to what would be in globalTeardown
-            testInfo.onTestEnd(async () => {
+            // AUTOMATIC CLEANUP: Register test-specific cleanup that runs automatically
+            const cleanupFunction = async () => {
+                logger.info(`=== AUTOMATIC CLEANUP TRIGGERED FOR: ${testName} ===`);
                 try {
                     if (urlTracker) {
-                        console.log(`Test ended, cleaning up URL tracker for: ${testName}`);
+                        logger.info(`Performing automatic cleanup for URL tracker: ${testName}`);
                         await urlTracker.cleanup();
+                        logger.info(`Automatic cleanup completed for URL tracker: ${testName}`);
+                        
+                        // Remove from global registry after cleanup
+                        global._urlTrackerRegistry.trackers.delete(uniqueTestId);
+                    } else {
+                        logger.warn(`No URL tracker found for automatic cleanup: ${testName}`);
                     }
                 } catch (e) {
-                    console.error(`Error in URL tracker cleanup for ${testName}:`, e);
+                    logger.error(`Error in automatic URL tracker cleanup for ${testName}:`, e);
                 }
-            });
+                logger.info(`=== AUTOMATIC CLEANUP COMPLETED FOR: ${testName} ===`);
+            };
+
+            // Register cleanup with multiple triggers for maximum reliability
+            
+            // 1. Playwright's built-in test end handler
+            testInfo.onTestEnd(cleanupFunction);
+            
+            // 2. Store cleanup function for global access
+            global._urlTrackerRegistry.testEndCallbacks.add(cleanupFunction);
+            
+            // 3. Set a timeout-based cleanup as a fallback (runs after test should be done)
+            setTimeout(async () => {
+                if (global._urlTrackerRegistry.trackers.has(uniqueTestId)) {
+                    logger.warn(`Timeout-based cleanup triggered for test: ${testName}`);
+                    await cleanupFunction();
+                }
+            }, 300000); // 5 minutes timeout
         },
         
         // Setup a handler that will be executed after each test
@@ -1491,8 +1785,6 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
                             // Use the spec file we've detected for this test session
                             const specFile = global._currentSpecFile || 'Unable to determine spec file';
                             
-                            console.log(`Adding final navigation entry: ${normalizedUrl} (spec file: ${specFile})`);
-                            
                             // Add to tracking results with new format
                             urlTracker.addTrackingResult({
                                 spec_file: specFile,
@@ -1502,49 +1794,218 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
                                 timestamp: new Date().toISOString(),
                                 navigation_type: 'final'
                             });
-                        } else {
-                            console.log('Final URL is null, skipping recording');
                         }
                     }
                 } catch (e) {
-                    console.log(`Warning: Could not record final navigation: ${e.message}`);
+                    // Ignore errors in final navigation recording
                 }
                 
                 // Export tracking results one last time to ensure they're saved
                 try {
                     urlTracker.exportResults();
-                    console.log(`Exported final tracking results for test: ${testInfo.title}`);
                 } catch (exportError) {
-                    console.error(`Error exporting final tracking results for test ${testInfo.title}:`, exportError);
+                    logger.error(`Error exporting final tracking results for test ${testInfo.title}:`, exportError);
                 }
-            } else {
-                console.log(`No URL tracker found for test: ${testInfo.title}`);
             }
         }
     };
 };
 
-// Enhance process exit handler to perform global teardown functionality
-// This enhances the existing one defined earlier in the file
-process.on('exit', () => {
-    console.log('URL Tracker: Process exit detected - performing automatic global teardown');
-    
-    // Export tracking results from all active trackers
+/**
+ * Generate a comprehensive API upload report
+ * This function checks all API upload attempts and reports success/failure
+ */
+function generateApiUploadReport() {
     try {
-        const globalObj = global || window || {};
-        if (globalObj._activeUrlTrackers && Array.isArray(globalObj._activeUrlTrackers)) {
-            console.log(`URL Tracker: Found ${globalObj._activeUrlTrackers.length} active trackers to save during teardown`);
-            globalObj._activeUrlTrackers.forEach(tracker => {
-                if (tracker && typeof tracker.exportResults === 'function') {
-                    console.log('URL Tracker: Saving tracker results during automatic teardown');
-                    tracker.exportResults();
-                }
+        const apiErrors = global._urlTrackerApiErrors || [];
+        const apiSuccesses = global._urlTrackerApiSuccesses || [];
+        const cleanupCalls = global._urlTrackerCleanupCalls || [];
+        
+        // Debug logging to help identify issues
+        logger.info(`=== API UPLOAD REPORT DEBUG ===`);
+        logger.info(`API Upload Report Debug: Found ${apiErrors.length} errors and ${apiSuccesses.length} successes`);
+        logger.info(`Cleanup calls made: ${cleanupCalls.length}`);
+        logger.info(`Global API errors object exists: ${!!global._urlTrackerApiErrors}`);
+        logger.info(`Global API successes object exists: ${!!global._urlTrackerApiSuccesses}`);
+        
+        // Show cleanup call details
+        if (cleanupCalls.length > 0) {
+            logger.info(`Cleanup calls details:`);
+            cleanupCalls.forEach((call, index) => {
+                logger.info(`  ${index + 1}. ${call.testName} - API Upload: ${call.apiUploadEnabled}, Has Uploader: ${call.hasApiUploader}, Results: ${call.trackingResultsCount}`);
+            });
+        } else {
+            logger.warn(`NO CLEANUP CALLS DETECTED! This means cleanup() method was never called.`);
+            logger.warn(`This indicates the URL tracker fixture is not being used correctly.`);
+            logger.warn(`Make sure you are using createUrlTrackerFixture() and test.use(fixture).`);
+        }
+        
+        // Show actual contents
+        if (global._urlTrackerApiErrors) {
+            logger.info(`API Errors content: ${JSON.stringify(global._urlTrackerApiErrors, null, 2)}`);
+        }
+        if (global._urlTrackerApiSuccesses) {
+            logger.info(`API Successes content: ${JSON.stringify(global._urlTrackerApiSuccesses, null, 2)}`);
+        }
+        
+        // Show all global properties related to URL tracker
+        const globalKeys = Object.keys(global).filter(key => key.includes('urlTracker') || key.includes('UrlTracker'));
+        logger.info(`All URL tracker related global keys: ${JSON.stringify(globalKeys)}`);
+        
+        // Count total tests that attempted API upload
+        const totalApiAttempts = apiErrors.length + apiSuccesses.length;
+        
+        if (totalApiAttempts === 0) {
+            logger.info('API Upload Report: No API upload attempts detected');
+            
+            if (cleanupCalls.length === 0) {
+                logger.error('ROOT CAUSE: cleanup() method was never called!');
+                logger.error('SOLUTION: Use the new self-contained fixture approach:');
+                logger.error('  1. Import: const { createUrlTrackerFixture } = require("@lambdatest/playwright-driver");');
+                logger.error('  2. Create fixture: const fixture = createUrlTrackerFixture({ enableApiUpload: true });');
+                logger.error('  3. Use fixture: test.use(fixture);');
+                logger.error('  4. Remove any manual URL tracker setup from your tests');
+            } else {
+                logger.info('Cleanup was called but no API uploads occurred. Possible reasons:');
+                logger.info('  1. API upload is disabled (enableApiUpload: false)');
+                logger.info('  2. No URL tracking results were generated');
+                logger.info('  3. API upload conditions were not met in cleanup()');
+                logger.info('  4. API uploader was not properly initialized');
+            }
+            return;
+        }
+        
+        logger.info('='.repeat(60));
+        logger.info('🔗 URL TRACKER - API UPLOAD REPORT');
+        logger.info('='.repeat(60));
+        
+        if (apiSuccesses.length > 0) {
+            logger.success(`✅ Successful uploads: ${apiSuccesses.length}`);
+            apiSuccesses.forEach(success => {
+                logger.success(`   ✓ ${success.testName} (${success.timestamp})`);
             });
         }
         
-        // Additional teardown steps if needed...
+        if (apiErrors.length > 0) {
+            logger.error(`❌ Failed uploads: ${apiErrors.length}`);
+            apiErrors.forEach(error => {
+                logger.error(`   ✗ ${error.testName}: ${error.error} (${error.timestamp})`);
+            });
+            
+            // If there are API upload failures, throw an error to fail the test run
+            logger.error('='.repeat(60));
+            logger.error('⚠️  API UPLOAD FAILURES DETECTED - TEST RUN FAILED');
+            logger.error('='.repeat(60));
+            
+            // Create a detailed error message
+            const errorMessage = `API Upload Failed: ${apiErrors.length} out of ${totalApiAttempts} tests failed to upload tracking data to LambdaTest API. ` +
+                                `Failed tests: ${apiErrors.map(e => e.testName).join(', ')}`;
+            
+            // Write error report to file
+            const errorReportPath = path.join(process.cwd(), 'api-upload-error-report.json');
+            try {
+                fs.writeFileSync(errorReportPath, JSON.stringify({
+                    summary: {
+                        totalAttempts: totalApiAttempts,
+                        successful: apiSuccesses.length,
+                        failed: apiErrors.length,
+                        timestamp: new Date().toISOString()
+                    },
+                    failures: apiErrors,
+                    successes: apiSuccesses
+                }, null, 2));
+                logger.error(`Detailed error report saved to: ${errorReportPath}`);
+            } catch (writeError) {
+                logger.error(`Failed to write error report: ${writeError.message}`);
+            }
+            
+            // Throw error to fail the test run
+            throw new Error(errorMessage);
+        } else {
+            logger.success(`✅ All ${apiSuccesses.length} API uploads completed successfully`);
+            logger.info('='.repeat(60));
+        }
         
-    } catch (e) {
-        console.error('URL Tracker: Error during automatic global teardown:', e);
+    } catch (error) {
+        if (error.message.includes('API Upload Failed:')) {
+            // Re-throw API upload errors
+            throw error;
+        } else {
+            logger.error('Error generating API upload report:', error);
+        }
     }
-}); 
+}
+
+/**
+ * Global cleanup function to clean up all remaining URL trackers
+ * This is automatically called by process handlers, but can also be called manually
+ */
+function performGlobalUrlTrackerCleanup() {
+    return new Promise(async (resolve) => {
+        try {
+            logger.info('=== PERFORMING GLOBAL URL TRACKER CLEANUP ===');
+            
+            const registry = global._urlTrackerRegistry;
+            if (!registry) {
+                logger.info('No URL tracker registry found');
+                resolve();
+                return;
+            }
+            
+            // Clean up all remaining trackers
+            if (registry.trackers && registry.trackers.size > 0) {
+                logger.info(`Cleaning up ${registry.trackers.size} remaining URL trackers`);
+                
+                for (const [testId, tracker] of registry.trackers) {
+                    try {
+                        if (tracker && typeof tracker.cleanup === 'function') {
+                            logger.info(`Cleaning up tracker: ${testId}`);
+                            await tracker.cleanup();
+                        }
+                    } catch (error) {
+                        logger.error(`Error cleaning up tracker ${testId}:`, error);
+                    }
+                }
+                
+                // Clear the registry
+                registry.trackers.clear();
+            } else {
+                logger.info('No remaining URL trackers to clean up');
+            }
+            
+            // Execute any remaining test end callbacks
+            if (registry.testEndCallbacks && registry.testEndCallbacks.size > 0) {
+                logger.info(`Executing ${registry.testEndCallbacks.size} remaining test end callbacks`);
+                
+                for (const callback of registry.testEndCallbacks) {
+                    try {
+                        await callback();
+                    } catch (error) {
+                        logger.error('Error executing test end callback:', error);
+                    }
+                }
+                
+                registry.testEndCallbacks.clear();
+            }
+            
+            // Generate final API upload report
+            try {
+                generateApiUploadReport();
+            } catch (error) {
+                logger.error('Error generating API upload report:', error);
+            }
+            
+            logger.info('=== GLOBAL URL TRACKER CLEANUP COMPLETED ===');
+            resolve();
+            
+        } catch (error) {
+            logger.error('Error during global URL tracker cleanup:', error);
+            resolve();
+        }
+    });
+}
+
+/**
+ * Export the global cleanup function for manual use
+ */
+module.exports.performGlobalUrlTrackerCleanup = performGlobalUrlTrackerCleanup; 
