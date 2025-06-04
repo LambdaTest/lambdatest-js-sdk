@@ -1,6 +1,8 @@
 const { EventEmitter } = require('events');
 const fs = require('fs');
 const path = require('path');
+const ApiUploader = require('./api-uploader');
+const { logger } = require('./logger');
 
 // Global flag to track if file has been reset in this process
 let fileResetCompleted = false;
@@ -51,6 +53,11 @@ class UrlTracker extends EventEmitter {
             outputFilename: 'url-tracking.json',
             resetFileOnStart: true,
             enableLogging: true,
+            // API upload options
+            enableApiUpload: options.enableApiUpload ?? true,
+            apiEndpoint: options.apiEndpoint,
+            username: options.username,
+            accessKey: options.accessKey,
             ...options
         };
         
@@ -66,6 +73,22 @@ class UrlTracker extends EventEmitter {
         this.hasRecordedFinalUrl = false;
         this.hasSavedReport = false;
         this.trackerInstalled = false;
+        this.trackingResults = []; // New property for API upload format
+        this.testMetadata = null; // New property to store test metadata
+        this.cleanupCalled = false; // Track if cleanup has been called
+        
+        // Initialize API uploader if enabled
+        if (this.options.enableApiUpload) {
+            logger.info('API upload is enabled for WebDriverIO URL tracker, initializing API uploader...');
+            this.apiUploader = new ApiUploader({
+                apiEndpoint: this.options.apiEndpoint,
+                username: this.options.username,
+                accessKey: this.options.accessKey
+            });
+            logger.info('API uploader initialized successfully for WebDriverIO');
+        } else {
+            logger.info('API upload is disabled for WebDriverIO URL tracker');
+        }
         
         // Navigation type mapping
         this.navigationTypeMap = {
@@ -305,6 +328,9 @@ class UrlTracker extends EventEmitter {
                 this.currentUrl = url;
                 newEntryCount++;
                 
+                // Also add to trackingResults for API upload
+                this.addTrackingResult(navigationEvent);
+                
                 // Emit event
                 const eventWithContext = {
                     ...navigationEvent,
@@ -338,6 +364,9 @@ class UrlTracker extends EventEmitter {
         
         this.navigationHistory.push(navigationEvent);
         this.currentUrl = url;
+        
+        // Also add to trackingResults for API upload
+        this.addTrackingResult(navigationEvent);
         
         // Emit event
         const eventWithContext = {
@@ -403,6 +432,12 @@ class UrlTracker extends EventEmitter {
     setSessionId(sessionId) {
         this.sessionId = sessionId;
         this.log(`Session ID set: ${sessionId}`);
+        
+        // Store session ID as test metadata for API upload
+        if (!this.testMetadata) {
+            this.testMetadata = {};
+        }
+        this.testMetadata.session_id = sessionId;
     }
 
     saveReport() {
@@ -539,6 +574,143 @@ class UrlTracker extends EventEmitter {
         }
         
         return undefined;
+    }
+
+    /**
+     * NEW: Add tracking result for API upload compatibility
+     */
+    addTrackingResult(result) {
+        // Validate required fields first
+        if (!result) {
+            logger.error('Attempted to add null or undefined tracking result');
+            return;
+        }
+        
+        // Skip results with null URLs
+        if (result.current_url === 'null' || result.current_url === null) {
+            return;
+        }
+        
+        // Map navigation type if possible
+        let navigation_type = result.navigation_type || 'navigation';
+        if (this.navigationTypeMap[navigation_type]) {
+            navigation_type = this.navigationTypeMap[navigation_type];
+        }
+        
+        const finalResult = {
+            spec_file: this.currentSpecFile || 'unknown.js',
+            test_name: this.currentTestName || 'Unknown Test',
+            previous_url: result.previous_url || 'null',
+            current_url: result.current_url || 'null',
+            timestamp: result.timestamp || new Date().toISOString(),
+            navigation_type: navigation_type
+        };
+        
+        // Check again after normalization to ensure we're not adding null URLs
+        if (finalResult.current_url === 'null') {
+            return;
+        }
+        
+        // Add the result to the array
+        this.trackingResults.push(finalResult);
+    }
+
+    /**
+     * NEW: Get tracking results for API upload
+     */
+    getTrackingResults() {
+        logger.info(`Getting ${this.trackingResults.length} tracking results for test: ${this.currentTestName || 'unknown'}`);
+        return [...this.trackingResults];
+    }
+
+    /**
+     * NEW: Cleanup method with API upload functionality
+     */
+    async cleanup() {
+        // Prevent duplicate cleanup
+        if (this.cleanupCalled) {
+            logger.info(`Cleanup already called for test: ${this.currentTestName}, skipping`);
+            return;
+        }
+        
+        this.cleanupCalled = true; // Mark as cleaned up
+        
+        logger.info(`=== CLEANUP DEBUG START for WebDriverIO ===`);
+        logger.info(`Cleaning up URL tracker for test: ${this.currentTestName}`);
+        logger.info(`API upload enabled: ${this.options.enableApiUpload} (type: ${typeof this.options.enableApiUpload})`);
+        logger.info(`API uploader exists: ${!!this.apiUploader}`);
+        logger.info(`Tracking results count: ${this.trackingResults ? this.trackingResults.length : 0}`);
+        
+        // If no results, create some basic tracking results from navigationHistory
+        if ((!this.trackingResults || this.trackingResults.length === 0) && this.navigationHistory.length > 0) {
+            logger.info('Converting navigationHistory to trackingResults for API upload');
+            this.navigationHistory.forEach(nav => {
+                this.addTrackingResult({
+                    previous_url: nav.previous_url || 'null',
+                    current_url: nav.current_url,
+                    timestamp: nav.timestamp,
+                    navigation_type: nav.navigation_type || 'navigation'
+                });
+            });
+        }
+        
+        // API upload logic
+        if (this.options.enableApiUpload && this.apiUploader && this.trackingResults.length > 0) {
+            try {
+                logger.info('Starting API upload for WebDriverIO...');
+                logger.info(`Uploading ${this.trackingResults.length} tracking results`);
+                
+                // Validate tracking data
+                const trackingData = { navigations: this.trackingResults };
+                if (ApiUploader.validateTrackingData(trackingData)) {
+                    // Extract test ID - use session ID if available, otherwise generate
+                    const testId = this.sessionId || 
+                                  (this.testMetadata && this.testMetadata.session_id) ||
+                                  `${this.currentTestName}_${Date.now()}`;
+                    
+                    logger.info(`Using test ID for API upload: ${testId}`);
+                    
+                    // Upload to API
+                    const response = await this.apiUploader.uploadTrackingResults(trackingData, testId);
+                    logger.success('API upload completed successfully for WebDriverIO');
+                    
+                    // Store the success for later reporting
+                    if (!global._urlTrackerApiSuccesses) {
+                        global._urlTrackerApiSuccesses = [];
+                    }
+                    global._urlTrackerApiSuccesses.push({
+                        testName: this.currentTestName,
+                        testId: testId,
+                        timestamp: new Date().toISOString(),
+                        framework: 'webdriverio'
+                    });
+                } else {
+                    throw new Error('Invalid tracking data - cannot upload to API');
+                }
+            } catch (error) {
+                logger.error(`API upload failed for WebDriverIO: ${error.message}`);
+                // Store the error for later reporting
+                if (!global._urlTrackerApiErrors) {
+                    global._urlTrackerApiErrors = [];
+                }
+                global._urlTrackerApiErrors.push({
+                    testName: this.currentTestName,
+                    error: error.message,
+                    timestamp: new Date().toISOString(),
+                    framework: 'webdriverio'
+                });
+            }
+        } else {
+            logger.info('API upload skipped for WebDriverIO:');
+            logger.info(`  - API upload enabled: ${this.options.enableApiUpload}`);
+            logger.info(`  - API uploader exists: ${!!this.apiUploader}`);
+            logger.info(`  - Tracking results count: ${this.trackingResults ? this.trackingResults.length : 0}`);
+        }
+        
+        logger.info(`=== CLEANUP DEBUG END for WebDriverIO ===`);
+        
+        // Call existing cleanup logic
+        this.onBeforeExit();
     }
 
     /**
@@ -746,6 +918,7 @@ class UrlTracker extends EventEmitter {
 
     clearHistory() {
         this.navigationHistory = [];
+        this.trackingResults = []; // Also clear API upload results
         this.hasRecordedFinalUrl = false;
         this.hasSavedReport = false;
     }

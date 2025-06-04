@@ -350,11 +350,17 @@ class UrlTrackerService {
                 }
             }
             
-            // Record final URL and save report
-            this.urlTracker.onBeforeExit();
+            // IMPORTANT: Call the new cleanup method with API upload functionality
+            try {
+                await this.urlTracker.cleanup();
+                console.log('URL Tracker Service - cleanup() completed successfully');
+            } catch (err) {
+                console.error('URL Tracker Service - Error in cleanup():', err);
+                // Fallback to old methods if cleanup fails
+                this.urlTracker.onBeforeExit();
+                this.urlTracker.destroy();
+            }
             
-            // Clean up resources
-            this.urlTracker.destroy();
             this.isDestroyed = true;
             
             // Restore original executeScript if we patched it
@@ -368,11 +374,20 @@ class UrlTrackerService {
     }
 
     // Final cleanup as the process is exiting
-    onComplete() {
+    async onComplete() {
         console.log('URL Tracker Service - onComplete() final cleanup');
         
         if (this.urlTracker && !this.isDestroyed) {
-            this.urlTracker.destroy();
+            // IMPORTANT: Call the new cleanup method with API upload functionality for final cleanup
+            try {
+                await this.urlTracker.cleanup();
+                console.log('URL Tracker Service - onComplete cleanup() completed successfully');
+            } catch (err) {
+                console.error('URL Tracker Service - Error in onComplete cleanup():', err);
+                // Fallback to old destroy method if cleanup fails
+                this.urlTracker.destroy();
+            }
+            
             this.isDestroyed = true;
             
             // Restore original executeScript if we patched it
