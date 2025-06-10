@@ -1,8 +1,17 @@
 const { EventEmitter } = require('events');
 const fs = require('fs');
 const path = require('path');
-const ApiUploader = require('./api-uploader');
-const { logger } = require('./logger');
+// Import ApiUploader and logger from common sdk-utils package
+const { ApiUploader, logger } = require('@lambdatest/sdk-utils');
+
+// Import HTML Reporter
+let HtmlReporter = null;
+try {
+    HtmlReporter = require('@lambdatest/sdk-utils').HtmlReporter;
+} catch (e) {
+    // Fallback if sdk-utils is not available
+    console.warn('HTML Reporter not available. Install @lambdatest/sdk-utils for HTML reports.');
+}
 
 class UrlTrackerPlugin extends EventEmitter {
     constructor(page, options = {}) {
@@ -23,29 +32,30 @@ class UrlTrackerPlugin extends EventEmitter {
             accessKey: options.accessKey
         };
         
-        // DEBUG: Log the actual options being used
-        logger.info(`URL Tracker Constructor Debug:`);
-        logger.info(`  - enableApiUpload: ${this.options.enableApiUpload} (type: ${typeof this.options.enableApiUpload})`);
-        logger.info(`  - enableApiUpload from options: ${options.enableApiUpload} (type: ${typeof options.enableApiUpload})`);
-        logger.info(`  - testName: ${this.options.testName}`);
-        logger.info(`  - specFile: ${this.options.specFile}`);
+        // DEBUG: Log the actual options being used (verbose mode only)
+        logger.verbose(`URL Tracker Constructor Debug:`);
+        logger.verbose(`  - enableApiUpload: ${this.options.enableApiUpload} (type: ${typeof this.options.enableApiUpload})`);
+        logger.verbose(`  - enableApiUpload from options: ${options.enableApiUpload} (type: ${typeof options.enableApiUpload})`);
+        logger.verbose(`  - testName: ${this.options.testName}`);
+        logger.verbose(`  - specFile: ${this.options.specFile}`);
         
         // Don't use hardcoded spec file names
         if (this.options.specFile === 'unknown') {
-            logger.warn('Spec file is unknown, will attempt to determine from test metadata');
+            logger.verbose('Spec file is unknown, will attempt to determine from test metadata');
         }
         
         // Initialize API uploader if enabled
         if (this.options.enableApiUpload) {
-            logger.info('API upload is enabled, initializing API uploader...');
-            this.apiUploader = new ApiUploader({
+            logger.verbose('API upload is enabled, initializing API uploader...');
+            this.apiUploader = ApiUploader.forPlaywright({
                 apiEndpoint: this.options.apiEndpoint,
                 username: this.options.username,
-                accessKey: this.options.accessKey
+                accessKey: this.options.accessKey,
+                verbose: options.verbose || false  // Pass through verbose option
             });
-            logger.info('API uploader initialized successfully');
+            logger.verbose('API uploader initialized successfully');
         } else {
-            logger.info('API upload is disabled');
+            logger.verbose('API upload is disabled');
         }
         
         // Initialize properties
@@ -194,7 +204,7 @@ class UrlTrackerPlugin extends EventEmitter {
         this.trackingResults = [];
 
         try {
-            logger.info(`Initializing URL tracker for test: ${this.options.testName}`);
+            logger.verbose(`Initializing URL tracker for test: ${this.options.testName}`);
             
             // CRITICAL: Fetch test metadata first - this must happen for every test session
             await this.fetchTestMetadataWithRetry();
@@ -237,7 +247,7 @@ class UrlTrackerPlugin extends EventEmitter {
 
             await this.setupPageListeners();
             this.isInitialized = true;
-            logger.info('URL tracker initialized successfully');
+            logger.verbose('URL tracker initialized successfully');
         } catch (error) {
             logger.error('Error initializing URL tracker:', error);
         }
@@ -312,6 +322,11 @@ class UrlTrackerPlugin extends EventEmitter {
                         timestamp: new Date().toISOString(),
                         navigation_type: navigation_type
                     });
+                    
+                    // Only log navigation captures in non-verbose mode
+                    if (!logger.verboseMode) {
+                        logger.navigation(`${oldUrl} → ${newUrl}`);
+                    }
                 }
             }
         });
@@ -618,15 +633,26 @@ class UrlTrackerPlugin extends EventEmitter {
         
         this.cleanupCalled = true; // Mark as cleaned up
         
-        logger.info(`=== CLEANUP DEBUG START ===`);
-        logger.info(`Cleaning up URL tracker for test: ${this.options.testName}`);
-        logger.info(`API upload enabled: ${this.options.enableApiUpload} (type: ${typeof this.options.enableApiUpload})`);
-        logger.info(`API uploader exists: ${!!this.apiUploader}`);
-        logger.info(`Tracking results count: ${this.trackingResults ? this.trackingResults.length : 0}`);
+        // ENHANCED DEBUG: Log cleanup entry only in verbose mode
+        logger.verbose(`[UrlTracker] === CLEANUP START ===`);
+        logger.verbose(`[UrlTracker] Test name: ${this.options.testName}`);
+        logger.verbose(`[UrlTracker] API upload enabled: ${this.options.enableApiUpload} (type: ${typeof this.options.enableApiUpload})`);
+        logger.verbose(`[UrlTracker] API uploader exists: ${!!this.apiUploader}`);
+        logger.verbose(`[UrlTracker] Tracking results count: ${this.trackingResults ? this.trackingResults.length : 0}`);
+        logger.verbose(`[UrlTracker] Navigation history count: ${this.navigationHistory ? this.navigationHistory.length : 0}`);
+        logger.verbose(`[UrlTracker] Test metadata exists: ${!!this.testMetadata}`);
+        
+        logger.verbose(`=== CLEANUP DEBUG START ===`);
+        logger.verbose(`Cleaning up URL tracker for test: ${this.options.testName}`);
+        logger.verbose(`API upload enabled: ${this.options.enableApiUpload} (type: ${typeof this.options.enableApiUpload})`);
+        logger.verbose(`API uploader exists: ${!!this.apiUploader}`);
+        logger.verbose(`Tracking results count: ${this.trackingResults ? this.trackingResults.length : 0}`);
         
         // DEBUG: Log the actual tracking results
         if (this.trackingResults && this.trackingResults.length > 0) {
-            logger.info(`Sample tracking result: ${JSON.stringify(this.trackingResults[0], null, 2)}`);
+            logger.verbose(`Sample tracking result: ${JSON.stringify(this.trackingResults[0], null, 2)}`);
+        } else {
+            logger.verbose(`No tracking results available`);
         }
         
         // DEBUG: Add global tracking for cleanup calls
@@ -643,6 +669,7 @@ class UrlTrackerPlugin extends EventEmitter {
         
         // Make final attempt to fetch metadata if we don't have it
         if (!this.testMetadata) {
+            logger.verbose(`Attempting to fetch test metadata...`);
             await this.fetchTestMetadataWithRetry();
         }
         
@@ -653,13 +680,16 @@ class UrlTrackerPlugin extends EventEmitter {
                 this.trackingResults.forEach(result => {
                     result.spec_file = this.options.specFile;
                 });
+                console.log(`[UrlTracker] Updated ${this.trackingResults.length} results with spec file: ${this.options.specFile}`);
             }
         }
         
             // If no results, record the current page URL as a final result
         if (!this.trackingResults || this.trackingResults.length === 0) {
+            console.log(`[UrlTracker] No tracking results found, attempting to record current page URL...`);
             try {
                 const currentUrl = this.normalizeUrl(this.page.url());
+                console.log(`[UrlTracker] Current page URL: ${currentUrl}`);
                 if (currentUrl !== 'null' && currentUrl !== 'about:blank') {
                     this.addTrackingResult({
                         spec_file: this.options.specFile,
@@ -669,35 +699,44 @@ class UrlTrackerPlugin extends EventEmitter {
                         timestamp: new Date().toISOString(),
                         navigation_type: 'final'
                     });
+                    console.log(`[UrlTracker] Added final URL tracking result`);
+                } else {
+                    console.log(`[UrlTracker] Current URL is null or about:blank, not recording`);
                 }
             } catch (e) {
+                console.log(`[UrlTracker] Error recording final URL: ${e.message}`);
                 logger.error('Error recording final URL:', e);
             }
         }
         
         // DEBUG: Check all conditions for API upload
-        logger.info(`=== API UPLOAD CONDITIONS CHECK ===`);
-        logger.info(`1. enableApiUpload: ${this.options.enableApiUpload}`);
-        logger.info(`2. apiUploader exists: ${!!this.apiUploader}`);
-        logger.info(`3. trackingResults.length > 0: ${this.trackingResults && this.trackingResults.length > 0}`);
-        logger.info(`4. All conditions met: ${this.options.enableApiUpload && this.apiUploader && this.trackingResults.length > 0}`);
+        logger.verbose(`=== API UPLOAD CONDITIONS CHECK ===`);
+        logger.verbose(`1. enableApiUpload: ${this.options.enableApiUpload}`);
+        logger.verbose(`2. apiUploader exists: ${!!this.apiUploader}`);
+        logger.verbose(`3. trackingResults.length > 0: ${this.trackingResults && this.trackingResults.length > 0}`);
+        logger.verbose(`4. All conditions met: ${this.options.enableApiUpload && this.apiUploader && this.trackingResults.length > 0}`);
         
         // NEW: Upload tracking results to API before file export
         if (this.options.enableApiUpload && this.apiUploader && this.trackingResults.length > 0) {
             try {
-                logger.info('Starting API upload...');
-                logger.info(`Uploading ${this.trackingResults.length} tracking results`);
+                logger.verbose('Starting API upload...');
+                logger.verbose(`Uploading ${this.trackingResults.length} tracking results`);
                 
                 // Validate tracking data
                 const trackingData = { navigations: this.trackingResults };
-                if (ApiUploader.validateTrackingData(trackingData)) {
+                logger.verbose(`Validating tracking data...`);
+                if (ApiUploader.validateTrackingData(trackingData, 'url-tracker')) {
                     // Extract test ID
                     const testId = ApiUploader.extractTestId(this.testMetadata, this.options);
-                    logger.info(`Using test ID: ${testId}`);
+                    logger.verbose(`Using test ID: ${testId}`);
                     
                     // Upload to API
-                    const response = await this.apiUploader.uploadTrackingResults(trackingData, testId);
-                    logger.success('API upload completed successfully');
+                    logger.verbose(`Calling apiUploader.uploadTrackingResults...`);
+                    const response = await this.apiUploader.uploadTrackingResults(trackingData, testId, {
+                        trackingType: 'url-tracker',
+                        framework: 'Playwright'
+                    });
+                    logger.apiUpload('Upload completed successfully');
                     
                     // Store the success for later reporting
                     if (!global._urlTrackerApiSuccesses) {
@@ -727,16 +766,58 @@ class UrlTrackerPlugin extends EventEmitter {
                 // Continue with cleanup even if API upload fails
             }
         } else {
+            console.log(`[UrlTracker] API upload skipped:`);
+            console.log(`[UrlTracker]   - API upload enabled: ${this.options.enableApiUpload}`);
+            console.log(`[UrlTracker]   - API uploader exists: ${!!this.apiUploader}`);
+            console.log(`[UrlTracker]   - Tracking results count: ${this.trackingResults ? this.trackingResults.length : 0}`);
+            
             logger.info('API upload skipped:');
             logger.info(`  - API upload enabled: ${this.options.enableApiUpload}`);
             logger.info(`  - API uploader exists: ${!!this.apiUploader}`);
             logger.info(`  - Tracking results count: ${this.trackingResults ? this.trackingResults.length : 0}`);
         }
         
+        console.log(`[UrlTracker] === CLEANUP DEBUG END ===`);
         logger.info(`=== CLEANUP DEBUG END ===`);
         
         // Before cleanup, export the results to file (existing functionality)
         this.exportResults();
+        
+        // Generate HTML report if HtmlReporter is available and we have tracking results
+        if (HtmlReporter && this.trackingResults && this.trackingResults.length > 0) {
+            try {
+                logger.info('Generating HTML report for Playwright URL tracking...');
+                
+                // Create session data format expected by HtmlReporter
+                const sessionData = [{
+                    metadata: this.testMetadata || {},
+                    navigations: this.trackingResults,
+                    session_id: this.testMetadata?.session_id || this.testMetadata?.build_id || `session_${Date.now()}`,
+                    spec_file: this.options.specFile
+                }];
+                
+                const htmlReporter = new HtmlReporter({
+                    outputDir: 'test-results',
+                    title: 'LambdaTest Playwright URL Tracking Report',
+                    theme: 'dark',
+                    enableKeyboardShortcut: false // Disable in test environment
+                });
+                
+                const htmlReportPath = htmlReporter.generateReport(sessionData, 'playwright');
+                logger.success(`HTML report generated: ${htmlReportPath}`);
+                
+                // Show keyboard shortcut info
+                logger.info('📊 HTML Report Available!');
+                logger.info(`   File: ${htmlReportPath}`);
+                logger.info('   Command: npx lt-report --open');
+                logger.info('   Or manually open the HTML file in your browser');
+                
+            } catch (htmlError) {
+                logger.warn(`Failed to generate HTML report: ${htmlError.message}`);
+                // Don't throw here, as cleanup should continue
+            }
+        }
+        
         this.preserveHistory = true;
         await this.destroy();
     }
@@ -794,7 +875,7 @@ class UrlTrackerPlugin extends EventEmitter {
             }
         }
         
-        // If no outputPath is provided, use both tests-results and test-results folders for compatibility
+        // Use only test-results folder
         const outputPaths = [];
         
         // Make sure we have tracking results
@@ -837,29 +918,25 @@ class UrlTrackerPlugin extends EventEmitter {
         }
         
         if (!outputPath) {
-            // Try both "tests-results" and "test-results" to handle different conventions
-            const resultsDir1 = path.join(process.cwd(), 'tests-results');
-            const resultsDir2 = path.join(process.cwd(), 'test-results');
+            // Use only test-results directory
+            const resultsDir = path.join(process.cwd(), 'test-results');
             
-            // Ensure the directories exist with proper permissions
-            [resultsDir1, resultsDir2].forEach(dir => {
-                if (!fs.existsSync(dir)) {
+            // Ensure the directory exists with proper permissions
+            if (!fs.existsSync(resultsDir)) {
+                try {
+                    fs.mkdirSync(resultsDir, { recursive: true, mode: 0o777 });
+                } catch (err) {
+                    logger.error(`Failed to create directory ${resultsDir}:`, err);
+                    // Try with different approach for Windows
                     try {
-                        fs.mkdirSync(dir, { recursive: true, mode: 0o777 });
-                    } catch (err) {
-                        logger.error(`Failed to create directory ${dir}:`, err);
-                        // Try with different approach for Windows
-                        try {
-                            require('child_process').execSync(`mkdir -p "${dir}"`);
-                        } catch (cmdErr) {
-                            logger.error(`Failed to create directory using command ${dir}:`, cmdErr);
-                        }
+                        require('child_process').execSync(`mkdir -p "${resultsDir}"`);
+                    } catch (cmdErr) {
+                        logger.error(`Failed to create directory using command ${resultsDir}:`, cmdErr);
                     }
                 }
-            });
+            }
             
-            outputPaths.push(path.join(resultsDir1, 'url-tracking-results.json'));
-            outputPaths.push(path.join(resultsDir2, 'url-tracking-results.json'));
+            outputPaths.push(path.join(resultsDir, 'url-tracking-results.json'));
         } else {
             outputPaths.push(outputPath);
         }
@@ -1000,9 +1077,11 @@ class UrlTrackerPlugin extends EventEmitter {
                 try {
                     // First try with standard fs.writeFileSync
                     fs.writeFileSync(outputPath, JSON.stringify(allSessions, null, 2), { encoding: 'utf8', mode: 0o666 });
-                    // Remove the excessive logging - only log once per test, not per file
-                    if (outputPath.includes('tests-results')) {
-                        logger.debug(`URL tracking results saved to: ${outputPath}`, true);
+                    // Log results saved only in verbose mode or once per test
+                    if (outputPath.includes('test-results')) {
+                        logger.verbose(`URL tracking results saved to: ${outputPath}`);
+                    } else {
+                        logger.export(`Results saved successfully`);
                     }
                 } catch (writeError) {
                     logger.error(`Error writing to ${outputPath} with writeFileSync:`, writeError);
@@ -1146,60 +1225,57 @@ class UrlTrackerPlugin extends EventEmitter {
 
     ensureOutputFilesExist() {
         try {
-            // Try both "tests-results" and "test-results" directories
-            const resultsDir1 = path.join(process.cwd(), 'tests-results');
-            const resultsDir2 = path.join(process.cwd(), 'test-results');
+            // Use only test-results directory
+            const resultsDir = path.join(process.cwd(), 'test-results');
             
-            // Ensure the directories exist with proper permissions
-            [resultsDir1, resultsDir2].forEach(dir => {
-                if (!fs.existsSync(dir)) {
+            // Ensure the directory exists with proper permissions
+            if (!fs.existsSync(resultsDir)) {
+                try {
+                    fs.mkdirSync(resultsDir, { recursive: true, mode: 0o777 });
+                } catch (err) {
+                    logger.error(`Failed to create directory ${resultsDir}:`, err);
+                    // Try different approaches
                     try {
-                        fs.mkdirSync(dir, { recursive: true, mode: 0o777 });
-                    } catch (err) {
-                        logger.error(`Failed to create directory ${dir}:`, err);
-                        // Try different approaches
-                        try {
-                            // Try mkdir directly if mkdirSync failed
-                            require('child_process').execSync(`mkdir -p "${dir}"`);
-                        } catch (cmdErr) {
-                            logger.error(`Failed to create directory using command ${dir}:`, cmdErr);
-                        }
+                        // Try mkdir directly if mkdirSync failed
+                        require('child_process').execSync(`mkdir -p "${resultsDir}"`);
+                    } catch (cmdErr) {
+                        logger.error(`Failed to create directory using command ${resultsDir}:`, cmdErr);
                     }
                 }
-                
-                // Create test file in the directory
-                const testFilePath = path.join(dir, 'url-tracking-results.json');
-                if (!fs.existsSync(testFilePath)) {
+            }
+            
+            // Create test file in the directory
+            const testFilePath = path.join(resultsDir, 'url-tracking-results.json');
+            if (!fs.existsSync(testFilePath)) {
+                try {
+                    fs.writeFileSync(testFilePath, '[]', { encoding: 'utf8', mode: 0o666 });
+                    
+                    // Test read
+                    const content = fs.readFileSync(testFilePath, 'utf-8');
+                } catch (e) {
+                    logger.error(`Error creating test file ${testFilePath}:`, e);
+                    
+                    // Try with current directory as fallback
                     try {
-                        fs.writeFileSync(testFilePath, '[]', { encoding: 'utf8', mode: 0o666 });
-                        
-                        // Test read
-                        const content = fs.readFileSync(testFilePath, 'utf-8');
-                    } catch (e) {
-                        logger.error(`Error creating test file ${testFilePath}:`, e);
-                        
-                        // Try with current directory as fallback
-                        try {
-                            const fallbackPath = path.join(process.cwd(), 'url-tracking-results.json');
-                            fs.writeFileSync(fallbackPath, '[]', { encoding: 'utf8' });
-                        } catch (fallbackErr) {
-                            logger.error('Failed to create fallback file in current directory:', fallbackErr);
-                        }
-                    }
-                } else {
-                    // Test if the file is readable/writable
-                    try {
-                        fs.accessSync(testFilePath, fs.constants.R_OK | fs.constants.W_OK);
-                    } catch (accessErr) {
-                        logger.error(`Cannot access ${testFilePath}:`, accessErr);
-                        try {
-                            fs.chmodSync(testFilePath, 0o666);
-                        } catch (chmodErr) {
-                            logger.error(`Failed to update permissions for ${testFilePath}:`, chmodErr);
-                        }
+                        const fallbackPath = path.join(process.cwd(), 'url-tracking-results.json');
+                        fs.writeFileSync(fallbackPath, '[]', { encoding: 'utf8' });
+                    } catch (fallbackErr) {
+                        logger.error('Failed to create fallback file in current directory:', fallbackErr);
                     }
                 }
-            });
+            } else {
+                // Test if the file is readable/writable
+                try {
+                    fs.accessSync(testFilePath, fs.constants.R_OK | fs.constants.W_OK);
+                } catch (accessErr) {
+                    logger.error(`Cannot access ${testFilePath}:`, accessErr);
+                    try {
+                        fs.chmodSync(testFilePath, 0o666);
+                    } catch (chmodErr) {
+                        logger.error(`Failed to update permissions for ${testFilePath}:`, chmodErr);
+                    }
+                }
+            }
         } catch (e) {
             logger.error('Error in ensureOutputFilesExist:', e);
         }
@@ -1437,7 +1513,7 @@ class UrlTrackerPlugin extends EventEmitter {
         });
 
         global._urlTrackerRegistry.cleanupHandlersRegistered = true;
-        logger.info('Global URL tracker cleanup handlers registered successfully');
+        logger.verbose('Global URL tracker cleanup handlers registered successfully');
     }
     
     // NEW METHOD: Perform automatic cleanup
@@ -1468,34 +1544,31 @@ class UrlTrackerPlugin extends EventEmitter {
     // NEW METHOD: Perform initial setup automatically
     performInitialSetup() {
         try {
-            // Ensure output directories exist
-            const resultsDir1 = path.join(process.cwd(), 'tests-results');
-            const resultsDir2 = path.join(process.cwd(), 'test-results');
+            // Ensure output directory exists
+            const resultsDir = path.join(process.cwd(), 'test-results');
             
-            [resultsDir1, resultsDir2].forEach(dir => {
-                if (!fs.existsSync(dir)) {
+            if (!fs.existsSync(resultsDir)) {
+                try {
+                    fs.mkdirSync(resultsDir, { recursive: true, mode: 0o777 });
+                } catch (err) {
+                    logger.error(`URL Tracker: Failed to create directory ${resultsDir}:`, err);
                     try {
-                        fs.mkdirSync(dir, { recursive: true, mode: 0o777 });
-                    } catch (err) {
-                        logger.error(`URL Tracker: Failed to create directory ${dir}:`, err);
-                        try {
-                            require('child_process').execSync(`mkdir -p "${dir}"`);
-                        } catch (cmdErr) {
-                            logger.error(`URL Tracker: Failed to create directory using command ${dir}:`, cmdErr);
-                        }
+                        require('child_process').execSync(`mkdir -p "${resultsDir}"`);
+                    } catch (cmdErr) {
+                        logger.error(`URL Tracker: Failed to create directory using command ${resultsDir}:`, cmdErr);
                     }
                 }
-                
-                // Initialize results file if it doesn't exist
-                const resultsFile = path.join(dir, 'url-tracking-results.json');
-                if (!fs.existsSync(resultsFile)) {
-                    try {
-                        fs.writeFileSync(resultsFile, '[]', { encoding: 'utf8', mode: 0o666 });
-                    } catch (writeErr) {
-                        logger.error(`URL Tracker: Failed to create initial results file ${resultsFile}:`, writeErr);
-                    }
+            }
+            
+            // Initialize results file if it doesn't exist
+            const resultsFile = path.join(resultsDir, 'url-tracking-results.json');
+            if (!fs.existsSync(resultsFile)) {
+                try {
+                    fs.writeFileSync(resultsFile, '[]', { encoding: 'utf8', mode: 0o666 });
+                } catch (writeErr) {
+                    logger.error(`URL Tracker: Failed to create initial results file ${resultsFile}:`, writeErr);
                 }
-            });
+            }
         } catch (setupErr) {
             logger.error('URL Tracker: Error during automatic initial setup:', setupErr);
         }
@@ -1588,6 +1661,13 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
                      getTestFileFromStack() || 
                      'unknown.spec.js';
 
+    // Log detected configuration
+    logger.verbose(`=== URL TRACKER FIXTURE CONFIGURATION ===`);
+    logger.verbose(`Detected spec file: ${specFile}`);
+    logger.verbose(`Options passed: ${JSON.stringify(options, null, 2)}`);
+    logger.verbose(`Verbose mode: ${options.verbose || false}`);
+    logger.verbose(`API upload enabled: ${options.enableApiUpload !== false}`);
+    
     // Initialize global tracker registry if it doesn't exist
     if (!global._urlTrackerRegistry) {
         global._urlTrackerRegistry = {
@@ -1595,11 +1675,14 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
             cleanupHandlersRegistered: false,
             testEndCallbacks: new Set()
         };
+        logger.verbose('Initialized global URL tracker registry');
+    } else {
+        logger.verbose('Global URL tracker registry already exists');
     }
 
     // Register global cleanup handlers only once
     if (!global._urlTrackerRegistry.cleanupHandlersRegistered) {
-        logger.info('Registering global URL tracker cleanup handlers...');
+        logger.verbose('Registering global URL tracker cleanup handlers...');
         
         // Process exit handler
         process.on('exit', () => {
@@ -1674,35 +1757,32 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
     // NEW: Perform global setup actions automatically
     // This eliminates the need for users to create a globalSetup file
     (function performGlobalSetup() {
-        // Ensure output directories exist
+        // Ensure output directory exists
         try {
-            const resultsDir1 = path.join(process.cwd(), 'tests-results');
-            const resultsDir2 = path.join(process.cwd(), 'test-results');
+            const resultsDir = path.join(process.cwd(), 'test-results');
             
-            [resultsDir1, resultsDir2].forEach(dir => {
-                if (!fs.existsSync(dir)) {
+            if (!fs.existsSync(resultsDir)) {
+                try {
+                    fs.mkdirSync(resultsDir, { recursive: true, mode: 0o777 });
+                } catch (err) {
+                    logger.error(`URL Tracker: Failed to create directory ${resultsDir}:`, err);
                     try {
-                        fs.mkdirSync(dir, { recursive: true, mode: 0o777 });
-                    } catch (err) {
-                        logger.error(`URL Tracker: Failed to create directory ${dir}:`, err);
-                        try {
-                            require('child_process').execSync(`mkdir -p "${dir}"`);
-                        } catch (cmdErr) {
-                            logger.error(`URL Tracker: Failed to create directory using command ${dir}:`, cmdErr);
-                        }
+                        require('child_process').execSync(`mkdir -p "${resultsDir}"`);
+                    } catch (cmdErr) {
+                        logger.error(`URL Tracker: Failed to create directory using command ${resultsDir}:`, cmdErr);
                     }
                 }
-                
-                // Initialize results file if it doesn't exist
-                const resultsFile = path.join(dir, 'url-tracking-results.json');
-                if (!fs.existsSync(resultsFile)) {
-                    try {
-                        fs.writeFileSync(resultsFile, '[]', { encoding: 'utf8', mode: 0o666 });
-                    } catch (writeErr) {
-                        logger.error(`URL Tracker: Failed to create initial results file ${resultsFile}:`, writeErr);
-                    }
+            }
+            
+            // Initialize results file if it doesn't exist
+            const resultsFile = path.join(resultsDir, 'url-tracking-results.json');
+            if (!fs.existsSync(resultsFile)) {
+                try {
+                    fs.writeFileSync(resultsFile, '[]', { encoding: 'utf8', mode: 0o666 });
+                } catch (writeErr) {
+                    logger.error(`URL Tracker: Failed to create initial results file ${resultsFile}:`, writeErr);
                 }
-            });
+            }
         } catch (setupErr) {
             logger.error('URL Tracker: Error during automatic global setup:', setupErr);
         }
@@ -1718,7 +1798,8 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
             const urlTracker = new UrlTrackerPlugin(page, {
                 ...options,
                 testName: options.testName || testName,
-                specFile: specFile  // Force the spec file to be what we detected
+                specFile: specFile,  // Force the spec file to be what we detected
+                verbose: options.verbose || false  // Pass through verbose option
             });
 
             // Store the tracker in the test info AND global registry
@@ -1728,7 +1809,7 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
             try {
                 // Initialize the tracker
                 await urlTracker.init();
-                logger.info(`URL tracker initialized for test: ${testName}`);
+                logger.verbose(`URL tracker initialized for test: ${testName}`);
             } catch (error) {
                 logger.error(`Error initializing URL tracker for test ${testName}:`, error);
             }
@@ -1737,7 +1818,7 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
             const cleanupFunction = async () => {
                 logger.info(`=== AUTOMATIC CLEANUP TRIGGERED FOR: ${testName} ===`);
                 try {
-                    if (urlTracker) {
+                    if (urlTracker && !urlTracker.cleanupCalled) {
                         logger.info(`Performing automatic cleanup for URL tracker: ${testName}`);
                         await urlTracker.cleanup();
                         logger.info(`Automatic cleanup completed for URL tracker: ${testName}`);
@@ -1745,7 +1826,11 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
                         // Remove from global registry after cleanup
                         global._urlTrackerRegistry.trackers.delete(uniqueTestId);
                     } else {
-                        logger.warn(`No URL tracker found for automatic cleanup: ${testName}`);
+                        if (urlTracker && urlTracker.cleanupCalled) {
+                            logger.info(`Cleanup already called for URL tracker: ${testName}`);
+                        } else {
+                            logger.warn(`No URL tracker found for automatic cleanup: ${testName}`);
+                        }
                     }
                 } catch (e) {
                     logger.error(`Error in automatic URL tracker cleanup for ${testName}:`, e);
@@ -1755,19 +1840,39 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
 
             // Register cleanup with multiple triggers for maximum reliability
             
-            // 1. Playwright's built-in test end handler
-            testInfo.onTestEnd(cleanupFunction);
+            // 1. Playwright's built-in test end handler - THIS IS THE MOST IMPORTANT
+            if (testInfo && typeof testInfo.onTestEnd === 'function') {
+                testInfo.onTestEnd(cleanupFunction);
+                logger.info(`Registered onTestEnd cleanup for test: ${testName}`);
+            } else {
+                logger.warn(`testInfo.onTestEnd is not available for test: ${testName}`);
+            }
             
             // 2. Store cleanup function for global access
+            if (!global._urlTrackerRegistry.testEndCallbacks) {
+                global._urlTrackerRegistry.testEndCallbacks = new Set();
+            }
             global._urlTrackerRegistry.testEndCallbacks.add(cleanupFunction);
             
-            // 3. Set a timeout-based cleanup as a fallback (runs after test should be done)
+            // 3. Hook into test info attach function as another trigger
+            if (testInfo && typeof testInfo.attach === 'function') {
+                const originalAttach = testInfo.attach;
+                testInfo.attach = function(...args) {
+                    // Call cleanup before attaching final test artifacts
+                    cleanupFunction().catch(err => {
+                        logger.error(`Error in attach-triggered cleanup for ${testName}:`, err);
+                    });
+                    return originalAttach.apply(this, args);
+                };
+            }
+            
+            // 4. Set a shorter timeout-based cleanup as a fallback
             setTimeout(async () => {
                 if (global._urlTrackerRegistry.trackers.has(uniqueTestId)) {
                     logger.warn(`Timeout-based cleanup triggered for test: ${testName}`);
                     await cleanupFunction();
                 }
-            }, 300000); // 5 minutes timeout
+            }, 30000); // 30 seconds timeout instead of 5 minutes
         },
         
         // Setup a handler that will be executed after each test
@@ -1822,68 +1927,68 @@ function generateApiUploadReport() {
         const cleanupCalls = global._urlTrackerCleanupCalls || [];
         
         // Debug logging to help identify issues
-        logger.info(`=== API UPLOAD REPORT DEBUG ===`);
-        logger.info(`API Upload Report Debug: Found ${apiErrors.length} errors and ${apiSuccesses.length} successes`);
-        logger.info(`Cleanup calls made: ${cleanupCalls.length}`);
-        logger.info(`Global API errors object exists: ${!!global._urlTrackerApiErrors}`);
-        logger.info(`Global API successes object exists: ${!!global._urlTrackerApiSuccesses}`);
+        logger.verbose(`=== API UPLOAD REPORT DEBUG ===`);
+        logger.verbose(`API Upload Report Debug: Found ${apiErrors.length} errors and ${apiSuccesses.length} successes`);
+        logger.verbose(`Cleanup calls made: ${cleanupCalls.length}`);
+        logger.verbose(`Global API errors object exists: ${!!global._urlTrackerApiErrors}`);
+        logger.verbose(`Global API successes object exists: ${!!global._urlTrackerApiSuccesses}`);
         
         // Show cleanup call details
         if (cleanupCalls.length > 0) {
-            logger.info(`Cleanup calls details:`);
+            logger.verbose(`Cleanup calls details:`);
             cleanupCalls.forEach((call, index) => {
-                logger.info(`  ${index + 1}. ${call.testName} - API Upload: ${call.apiUploadEnabled}, Has Uploader: ${call.hasApiUploader}, Results: ${call.trackingResultsCount}`);
+                logger.verbose(`  ${index + 1}. ${call.testName} - API Upload: ${call.apiUploadEnabled}, Has Uploader: ${call.hasApiUploader}, Results: ${call.trackingResultsCount}`);
             });
         } else {
-            logger.warn(`NO CLEANUP CALLS DETECTED! This means cleanup() method was never called.`);
-            logger.warn(`This indicates the URL tracker fixture is not being used correctly.`);
-            logger.warn(`Make sure you are using createUrlTrackerFixture() and test.use(fixture).`);
+            logger.verbose(`NO CLEANUP CALLS DETECTED! This means cleanup() method was never called.`);
+            logger.verbose(`This indicates the URL tracker fixture is not being used correctly.`);
+            logger.verbose(`Make sure you are using createUrlTrackerFixture() and test.use(fixture).`);
         }
         
         // Show actual contents
         if (global._urlTrackerApiErrors) {
-            logger.info(`API Errors content: ${JSON.stringify(global._urlTrackerApiErrors, null, 2)}`);
+            logger.verbose(`API Errors content: ${JSON.stringify(global._urlTrackerApiErrors, null, 2)}`);
         }
         if (global._urlTrackerApiSuccesses) {
-            logger.info(`API Successes content: ${JSON.stringify(global._urlTrackerApiSuccesses, null, 2)}`);
+            logger.verbose(`API Successes content: ${JSON.stringify(global._urlTrackerApiSuccesses, null, 2)}`);
         }
         
         // Show all global properties related to URL tracker
         const globalKeys = Object.keys(global).filter(key => key.includes('urlTracker') || key.includes('UrlTracker'));
-        logger.info(`All URL tracker related global keys: ${JSON.stringify(globalKeys)}`);
+        logger.verbose(`All URL tracker related global keys: ${JSON.stringify(globalKeys)}`);
         
         // Count total tests that attempted API upload
         const totalApiAttempts = apiErrors.length + apiSuccesses.length;
         
         if (totalApiAttempts === 0) {
-            logger.info('API Upload Report: No API upload attempts detected');
+            logger.verbose('API Upload Report: No API upload attempts detected');
             
             if (cleanupCalls.length === 0) {
-                logger.error('ROOT CAUSE: cleanup() method was never called!');
-                logger.error('SOLUTION: Use the new self-contained fixture approach:');
-                logger.error('  1. Import: const { createUrlTrackerFixture } = require("@lambdatest/playwright-driver");');
-                logger.error('  2. Create fixture: const fixture = createUrlTrackerFixture({ enableApiUpload: true });');
-                logger.error('  3. Use fixture: test.use(fixture);');
-                logger.error('  4. Remove any manual URL tracker setup from your tests');
+                logger.verbose('ROOT CAUSE: cleanup() method was never called!');
+                logger.verbose('SOLUTION: Use the new self-contained fixture approach:');
+                logger.verbose('  1. Import: const { createUrlTrackerFixture } = require("@lambdatest/playwright-driver");');
+                logger.verbose('  2. Create fixture: const fixture = createUrlTrackerFixture({ enableApiUpload: true });');
+                logger.verbose('  3. Use fixture: test.use(fixture);');
+                logger.verbose('  4. Remove any manual URL tracker setup from your tests');
             } else {
-                logger.info('Cleanup was called but no API uploads occurred. Possible reasons:');
-                logger.info('  1. API upload is disabled (enableApiUpload: false)');
-                logger.info('  2. No URL tracking results were generated');
-                logger.info('  3. API upload conditions were not met in cleanup()');
-                logger.info('  4. API uploader was not properly initialized');
+                logger.verbose('Cleanup was called but no API uploads occurred. Possible reasons:');
+                logger.verbose('  1. API upload is disabled (enableApiUpload: false)');
+                logger.verbose('  2. No URL tracking results were generated');
+                logger.verbose('  3. API upload conditions were not met in cleanup()');
+                logger.verbose('  4. API uploader was not properly initialized');
             }
             return;
         }
         
-        logger.info('='.repeat(60));
         logger.info('🔗 URL TRACKER - API UPLOAD REPORT');
-        logger.info('='.repeat(60));
         
         if (apiSuccesses.length > 0) {
-            logger.success(`✅ Successful uploads: ${apiSuccesses.length}`);
-            apiSuccesses.forEach(success => {
-                logger.success(`   ✓ ${success.testName} (${success.timestamp})`);
-            });
+            logger.apiUpload(`✅ Successful uploads: ${apiSuccesses.length}`);
+            if (logger.verboseMode) {
+                apiSuccesses.forEach(success => {
+                    logger.success(`   ✓ ${success.testName} (${success.timestamp})`);
+                });
+            }
         }
         
         if (apiErrors.length > 0) {
@@ -1893,9 +1998,7 @@ function generateApiUploadReport() {
             });
             
             // If there are API upload failures, throw an error to fail the test run
-            logger.error('='.repeat(60));
             logger.error('⚠️  API UPLOAD FAILURES DETECTED - TEST RUN FAILED');
-            logger.error('='.repeat(60));
             
             // Create a detailed error message
             const errorMessage = `API Upload Failed: ${apiErrors.length} out of ${totalApiAttempts} tests failed to upload tracking data to LambdaTest API. ` +
@@ -1922,8 +2025,7 @@ function generateApiUploadReport() {
             // Throw error to fail the test run
             throw new Error(errorMessage);
         } else {
-            logger.success(`✅ All ${apiSuccesses.length} API uploads completed successfully`);
-            logger.info('='.repeat(60));
+            logger.apiUpload(`✅ All ${apiSuccesses.length} API uploads completed successfully`);
         }
         
     } catch (error) {

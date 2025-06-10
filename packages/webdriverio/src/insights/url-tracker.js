@@ -1,8 +1,18 @@
 const { EventEmitter } = require('events');
 const fs = require('fs');
 const path = require('path');
-const ApiUploader = require('./api-uploader');
-const { logger } = require('./logger');
+// Import ApiUploader from common sdk-utils package
+const { ApiUploader } = require('../../../sdk-utils/src/insights/api-uploader');
+const { logger } = require('../../../sdk-utils/src/insights/logger');
+
+// Import HTML Reporter
+let HtmlReporter = null;
+try {
+    HtmlReporter = require('@lambdatest/sdk-utils').HtmlReporter;
+} catch (e) {
+    // Fallback if sdk-utils is not available
+    console.warn('HTML Reporter not available. Install @lambdatest/sdk-utils for HTML reports.');
+}
 
 // Global flag to track if file has been reset in this process
 let fileResetCompleted = false;
@@ -80,10 +90,11 @@ class UrlTracker extends EventEmitter {
         // Initialize API uploader if enabled
         if (this.options.enableApiUpload) {
             logger.info('API upload is enabled for WebDriverIO URL tracker, initializing API uploader...');
-            this.apiUploader = new ApiUploader({
+            this.apiUploader = ApiUploader.forWebDriverIO({
                 apiEndpoint: this.options.apiEndpoint,
                 username: this.options.username,
-                accessKey: this.options.accessKey
+                accessKey: this.options.accessKey,
+                verbose: options.verbose || false  // Pass through verbose option
             });
             logger.info('API uploader initialized successfully for WebDriverIO');
         } else {
@@ -124,7 +135,7 @@ class UrlTracker extends EventEmitter {
 
     log(message) {
         if (this.options.enableLogging) {
-            console.log(`[UrlTracker] ${message}`);
+            logger.verbose(`[UrlTracker] ${message}`);
         }
     }
     
@@ -662,7 +673,7 @@ class UrlTracker extends EventEmitter {
                 
                 // Validate tracking data
                 const trackingData = { navigations: this.trackingResults };
-                if (ApiUploader.validateTrackingData(trackingData)) {
+                if (ApiUploader.validateTrackingData(trackingData, 'url-tracker')) {
                     // Extract test ID - use session ID if available, otherwise generate
                     const testId = this.sessionId || 
                                   (this.testMetadata && this.testMetadata.session_id) ||
@@ -671,7 +682,10 @@ class UrlTracker extends EventEmitter {
                     logger.info(`Using test ID for API upload: ${testId}`);
                     
                     // Upload to API
-                    const response = await this.apiUploader.uploadTrackingResults(trackingData, testId);
+                    const response = await this.apiUploader.uploadTrackingResults(trackingData, testId, {
+                        trackingType: 'url-tracker',
+                        framework: 'WebDriverIO'
+                    });
                     logger.success('API upload completed successfully for WebDriverIO');
                     
                     // Store the success for later reporting
@@ -708,6 +722,43 @@ class UrlTracker extends EventEmitter {
         }
         
         logger.info(`=== CLEANUP DEBUG END for WebDriverIO ===`);
+        
+        // Generate HTML report if HtmlReporter is available and we have tracking results
+        if (HtmlReporter && this.trackingResults && this.trackingResults.length > 0) {
+            try {
+                logger.info('Generating HTML report for WebDriverIO URL tracking...');
+                
+                // Create session data format expected by HtmlReporter
+                const sessionData = [{
+                    session_id: this.sessionId || `session_${Date.now()}`,
+                    spec_file: this.currentSpecFile || 'unknown',
+                    test_name: this.currentTestName || 'unknown',
+                    navigations: this.trackingResults,
+                    timestamp: new Date().toISOString(),
+                    navigation_count: this.trackingResults.length
+                }];
+                
+                const htmlReporter = new HtmlReporter({
+                    outputDir: this.options.outputDirectory || 'test-results',
+                    title: 'LambdaTest WebDriverIO URL Tracking Report',
+                    theme: 'dark',
+                    enableKeyboardShortcut: false // Disable in test environment
+                });
+                
+                const htmlReportPath = htmlReporter.generateReport(sessionData, 'webdriverio');
+                logger.success(`HTML report generated: ${htmlReportPath}`);
+                
+                // Show keyboard shortcut info
+                logger.info('📊 HTML Report Available!');
+                logger.info(`   File: ${htmlReportPath}`);
+                logger.info('   Command: npx lt-report --open');
+                logger.info('   Or manually open the HTML file in your browser');
+                
+            } catch (htmlError) {
+                logger.warn(`Failed to generate HTML report: ${htmlError.message}`);
+                // Don't throw here, as cleanup should continue
+            }
+        }
         
         // Call existing cleanup logic
         this.onBeforeExit();

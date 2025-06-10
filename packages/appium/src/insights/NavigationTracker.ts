@@ -1,5 +1,6 @@
-import { logger } from './logger';
-import { ApiUploader, ApiUploaderOptions, TrackingData } from './api-uploader';
+// Import logger and ApiUploader from the common SDK utils
+const { logger } = require('../../../sdk-utils/src/insights/logger');
+const { ApiUploader } = require('../../../sdk-utils/src/insights/api-uploader');
 
 // Declare Node.js modules and globals
 declare const require: (name: string) => any;
@@ -11,6 +12,9 @@ declare const global: any;
 // Get Node.js modules
 const fs = require('fs');
 const path = require('path');
+
+// Import HTML Reporter from common SDK utils
+const { HtmlReporter } = require('../../../sdk-utils/src/insights/html-reporter');
 
 interface Navigation {
   previous_screen: string;
@@ -40,6 +44,7 @@ interface ElementInfo {
 interface NavigationTrackerOptions {
   enableApiUpload?: boolean;
   apiUploadOptions?: ApiUploaderOptions;
+  verbose?: boolean;
 }
 
 // Add type definitions for test framework globals
@@ -60,6 +65,22 @@ declare global {
   }
 }
 
+// Local type definitions for the imported ApiUploader
+interface ApiUploaderOptions {
+  apiEndpoint?: string;
+  username?: string;
+  accessKey?: string;
+  timeout?: number;
+  retryAttempts?: number;
+  retryDelay?: number;
+  trackingType?: string;
+  verbose?: boolean;
+}
+
+interface TrackingData {
+  navigations: Navigation[];
+}
+
 export class NavigationTracker {
   private driver: any; // Appium driver instance
   private currentScreen: string = '';
@@ -74,7 +95,7 @@ export class NavigationTracker {
   private lastCheckTime: number = 0;
   private minCheckInterval: number = 300; // Minimum ms between checks
   private options: NavigationTrackerOptions;
-  private apiUploader?: ApiUploader;
+  private apiUploader?: any;
   
   // For tracking UI changes
   private lastPageSourceHash: string = '';
@@ -102,23 +123,28 @@ export class NavigationTracker {
     
     // Initialize API uploader if enabled
     if (this.options.enableApiUpload) {
-      this.apiUploader = new ApiUploader(this.options.apiUploadOptions || {});
+      const uploaderOptions = this.options.apiUploadOptions || {};
+      // Check for verbose mode in options
+      if (options.verbose || uploaderOptions.verbose) {
+        uploaderOptions.verbose = true;
+      }
+      this.apiUploader = ApiUploader.forAppium(uploaderOptions);
       logger.init('API upload enabled');
     }
     
     // Extract sessionId from driver
     this.extractSessionId();
     
-    logger.init('Initializing NavigationTracker with driver');
-    
-    // Reset test-results directory
-    this.resetResultsDirectory();
-    
-    // Detect platform immediately (synchronous check)
-    this.detectPlatformSync();
-    
-    // Initialize action to screen mapping
-    this.initializeActionScreenMap();
+            logger.verbose('Initializing NavigationTracker with driver');
+        
+        // Reset test-results directory
+        this.resetResultsDirectory();
+        
+        // Detect platform immediately (synchronous check)
+        this.detectPlatformSync();
+        
+        // Initialize action to screen mapping
+        this.initializeActionScreenMap();
   }
 
   /**
@@ -138,7 +164,7 @@ export class NavigationTracker {
         this.sessionId = `session_${Date.now()}`;
       }
       
-      logger.metadata(`Session ID: ${this.sessionId}`);
+      logger.verbose(`Session ID: ${this.sessionId}`);
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       logger.error(`Error extracting session ID: ${errorMsg}`);
@@ -180,7 +206,7 @@ export class NavigationTracker {
       
       this.platformName = this.isAndroid ? 'Android' : this.isIOS ? 'iOS' : 'Unknown';
       
-      logger.init(`Platform detected: ${this.platformName}`);
+      logger.verbose(`Platform detected: ${this.platformName}`);
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       logger.error(`Error in platform detection: ${errorMsg}`);
@@ -206,7 +232,7 @@ export class NavigationTracker {
     
     // Set initial screen
     this.currentScreen = 'Home Screen';
-    logger.init('Action to screen mapping initialized');
+    logger.verbose('Action to screen mapping initialized');
   }
 
   /**
@@ -337,7 +363,7 @@ export class NavigationTracker {
    */
   public async recordUserAction(elementId: string) {
     this.lastAction = elementId;
-    logger.navigation(`User action recorded: ${elementId}`);
+    logger.verbose(`User action recorded: ${elementId}`);
     
     // Update current screen based on element interaction
     if (this.actionScreenMap.has(elementId)) {
@@ -370,7 +396,13 @@ export class NavigationTracker {
     
     this.navigations.push(navigation);
     this.currentScreen = currentScreen;
-    logger.navigation(`Navigation added: ${previousScreen} -> ${currentScreen} (${navigationType})`);
+    
+    // Only log navigation captures in non-verbose mode for essential info
+    if (!logger.verboseMode) {
+      logger.navigation(`${previousScreen} → ${currentScreen}`);
+    } else {
+      logger.verbose(`Navigation added: ${previousScreen} -> ${currentScreen} (${navigationType})`);
+    }
   }
 
   public async trackNavigation() {
@@ -548,8 +580,8 @@ export class NavigationTracker {
 
   public async saveResults() {
     try {
-      logger.export('Saving navigation results...');
-      logger.metadata(`Total navigation events: ${this.navigations.length}`);
+      logger.verbose('Saving navigation results...');
+      logger.verbose(`Total navigation events: ${this.navigations.length}`);
       
       // Dynamically get test name and spec file if they weren't provided
       const testName = this.getTestName();
@@ -571,36 +603,69 @@ export class NavigationTracker {
       }
 
       const filePath = path.join(this.resultsDir, 'navigation-tracking.json');
-      logger.export(`Saving results to: ${filePath}`);
-      logger.metadata(`Test: ${testName}, Spec: ${specFile}`);
+      logger.verbose(`Saving results to: ${filePath}`);
+      logger.verbose(`Test: ${testName}, Spec: ${specFile}`);
       
       fs.writeFileSync(filePath, JSON.stringify(result, null, 2));
-      logger.success('Results saved successfully');
+      logger.export('Results saved successfully');
 
-      // Upload to API if enabled
-      if (this.apiUploader && this.navigations.length > 0) {
-        try {
-          logger.apiUpload('Attempting to upload navigation data to LambdaTest API...');
-          
-          // Prepare tracking data for API
-          const trackingData: TrackingData = {
-            navigations: this.navigations
-          };
-          
-          // Validate data before upload
-          if (ApiUploader.validateTrackingData(trackingData)) {
-            const testId = ApiUploader.extractTestId({ session_id: this.sessionId }, { testName });
-            await this.apiUploader.uploadTrackingResults(trackingData, testId);
-            logger.success('Navigation data uploaded to LambdaTest API successfully');
-          } else {
-            logger.warn('Skipping API upload due to invalid tracking data');
+              // Upload to API if enabled
+        if (this.apiUploader && this.navigations.length > 0) {
+          try {
+            logger.verbose('Attempting to upload navigation data to LambdaTest API...');
+            
+            // Prepare tracking data for API
+            const trackingData: TrackingData = {
+              navigations: this.navigations
+            };
+            
+            // Validate data before upload
+            if (ApiUploader.validateTrackingData(trackingData, 'mobile-navigation-tracker')) {
+              const testId = ApiUploader.extractTestId({ session_id: this.sessionId }, { testName });
+              await this.apiUploader.uploadTrackingResults(trackingData, testId, { 
+                trackingType: 'mobile-navigation-tracker',
+                framework: 'Appium'
+              });
+              logger.apiUpload('Upload completed successfully');
+            } else {
+              logger.warn('Skipping API upload due to invalid tracking data');
+            }
+          } catch (uploadError) {
+            const errorMsg = uploadError instanceof Error ? uploadError.message : String(uploadError);
+            logger.error(`API upload failed: ${errorMsg}`);
+            // Don't throw here, as local save was successful
           }
-        } catch (uploadError) {
-          const errorMsg = uploadError instanceof Error ? uploadError.message : String(uploadError);
-          logger.error(`Failed to upload to API: ${errorMsg}`);
-          // Don't throw here, as local save was successful
         }
-      }
+
+              // Generate HTML report
+        if (this.navigations.length > 0) {
+          try {
+            logger.verbose('Generating HTML report...');
+            
+            const htmlReporter = new HtmlReporter({
+              outputDir: this.resultsDir,
+              title: 'LambdaTest Appium Navigation Report',
+              theme: 'dark',
+              enableKeyboardShortcut: false // Disable in test environment
+            });
+            
+            const htmlReportPath = htmlReporter.generateReport(result, 'appium');
+            logger.success(`HTML report generated: ${htmlReportPath}`);
+            
+            // Show keyboard shortcut info only in verbose mode
+            if (logger.verboseMode) {
+              logger.info('📊 HTML Report Available!');
+              logger.info(`   File: ${htmlReportPath}`);
+              logger.info('   Command: npx lt-report --open');
+              logger.info('   Or manually open the HTML file in your browser');
+            }
+            
+          } catch (htmlError) {
+            const errorMsg = htmlError instanceof Error ? htmlError.message : String(htmlError);
+            logger.warn(`Failed to generate HTML report: ${errorMsg}`);
+            // Don't throw here, as JSON save was successful
+          }
+        }
       
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);

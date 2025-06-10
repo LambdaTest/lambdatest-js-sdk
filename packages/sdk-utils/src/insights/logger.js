@@ -13,12 +13,23 @@ const colors = {
 };
 
 // Logo using Unicode characters to represent the LambdaTest logo
-const LOGO = '🌐'; // Chain link emoji as a simple representation
+const LOGO = '⚡'; // Chain link emoji as a simple representation
 
 class UrlTrackerLogger {
     constructor() {
         this.prefix = `${colors.teal}${LOGO} LT Insights${colors.reset}`;
         this.isColorSupported = this.checkColorSupport();
+        this.verboseMode = this.isVerboseEnabled();
+    }
+
+    /**
+     * Check if verbose mode is enabled
+     */
+    isVerboseEnabled() {
+        return !!(process.env.DEBUG_URL_TRACKER || 
+                 process.env.LT_VERBOSE || 
+                 process.env.VERBOSE || 
+                 process.env.DEBUG);
     }
 
     /**
@@ -53,7 +64,7 @@ class UrlTrackerLogger {
         if (this.isColorSupported) {
             return `${this.prefix} ${timeColor}[${timestamp}]${colors.reset} ${color}${message}${colors.reset}`;
         } else {
-            return `🌐 LT Insights [${timestamp}] ${message}`;
+            return `${LOGO} LT Insights [${timestamp}] ${message}`;
         }
     }
 
@@ -89,8 +100,17 @@ class UrlTrackerLogger {
      * Log debug message in gray (only if debug is enabled)
      */
     debug(message, debugEnabled = false) {
-        if (debugEnabled || process.env.DEBUG_URL_TRACKER) {
+        if (debugEnabled || this.verboseMode) {
             console.log(this.formatMessage('debug', message, colors.gray));
+        }
+    }
+
+    /**
+     * Log verbose messages (only shown when verbose mode is enabled)
+     */
+    verbose(message) {
+        if (this.verboseMode) {
+            console.log(this.formatMessage('verbose', message, colors.gray));
         }
     }
 
@@ -181,6 +201,10 @@ class ContextLogger {
 
     debug(message, debugEnabled = false) {
         this.parent.debug(this._formatWithContext(message), debugEnabled);
+    }
+
+    verbose(message) {
+        this.parent.verbose(this._formatWithContext(message));
     }
 
     apiUpload(message) {
