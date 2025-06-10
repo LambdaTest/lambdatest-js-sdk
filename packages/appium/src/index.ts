@@ -1,6 +1,6 @@
 export { NavigationTracker } from './insights/NavigationTracker';
 // Re-export logger, UrlTrackerLogger and ApiUploader from common sdk-utils
-const { logger, UrlTrackerLogger } = require('../../sdk-utils/src/insights/logger');
+const { logger, UrlTrackerLogger } = require('../../sdk-utils/src/insights/insights-logger');
 const { enableVerboseMode: universalEnableVerbose, runDebugScript } = require('../../sdk-utils');
 const { ApiUploader } = require('../../sdk-utils/src/insights/api-uploader');
 

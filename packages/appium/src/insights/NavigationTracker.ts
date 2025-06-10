@@ -1,5 +1,5 @@
 // Import logger and ApiUploader from the common SDK utils
-const { logger } = require('../../../sdk-utils/src/insights/logger');
+const { logger } = require('../../../sdk-utils/src/insights/insights-logger');
 const { ApiUploader } = require('../../../sdk-utils/src/insights/api-uploader');
 
 // Declare Node.js modules and globals

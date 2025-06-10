@@ -4,9 +4,9 @@ const {
   postSnapshot,
 } = require("./src/smartui");
 const logger = require("./src/lib/logger");
-const HtmlReporter = require("./src/insights/html-reporter");
+const { HtmlReporter } = require("./src/insights/html-reporter");
 const ApiUploader = require("./src/insights/api-uploader");
-const { UrlTrackerLogger } = require("./src/insights/logger");
+const { UrlTrackerLogger } = require("./src/insights/insights-logger");
 
 // Helper function to enable verbose mode for all frameworks
 function enableVerboseMode() {

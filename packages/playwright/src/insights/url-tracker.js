@@ -1,16 +1,56 @@
 const { EventEmitter } = require('events');
 const fs = require('fs');
 const path = require('path');
-// Import ApiUploader and logger from common sdk-utils package
-const { ApiUploader, logger } = require('@lambdatest/sdk-utils');
+// Import logger first
+const { logger } = require('../../../sdk-utils/src/insights/insights-logger');
+
+// Import ApiUploader dynamically to avoid circular dependency issues
+let ApiUploader = null;
+try {
+    ApiUploader = require('../../../sdk-utils/src/insights/api-uploader');
+} catch (e) {
+    logger.error('Failed to import ApiUploader:', e.message);
+}
 
 // Import HTML Reporter
-let HtmlReporter = null;
+let HtmlReporter;
 try {
-    HtmlReporter = require('@lambdatest/sdk-utils').HtmlReporter;
+    const { HtmlReporter: Reporter } = require('../../../sdk-utils');
+    HtmlReporter = Reporter;
 } catch (e) {
     // Fallback if sdk-utils is not available
     console.warn('HTML Reporter not available. Install @lambdatest/sdk-utils for HTML reports.');
+}
+
+// Track if we've shown the HTML report prompt
+let hasShownReportPrompt = false;
+
+// Store the HTML reporter instance globally
+let globalHtmlReporter = null;
+
+// Function to show the HTML report prompt once at the end of all tests
+function showHtmlReportPrompt(htmlReporter, reportPath) {
+    if (hasShownReportPrompt) return;
+    
+    // Store the reporter globally
+    globalHtmlReporter = htmlReporter;
+    
+    // Show the prompt only once
+    hasShownReportPrompt = true;
+    
+    // Add a small delay to ensure this shows after all test output
+    setTimeout(() => {
+        console.log('\n');
+        console.log('  URL Tracking Report is ready:');
+        console.log(`  ${reportPath}`);
+        console.log('\n  Press "o" to open the report in your browser');
+        console.log('  Press "Ctrl+C" to exit\n');
+        
+        // Setup keyboard listener
+        if (htmlReporter) {
+            htmlReporter.setupKeyboardShortcut();
+        }
+    }, 100);
 }
 
 class UrlTrackerPlugin extends EventEmitter {
@@ -29,15 +69,29 @@ class UrlTrackerPlugin extends EventEmitter {
             enableApiUpload: options.enableApiUpload ?? true,
             apiEndpoint: options.apiEndpoint,
             username: options.username,
-            accessKey: options.accessKey
+            accessKey: options.accessKey,
+            verbose: options.verbose ?? false  // Default to false
         };
         
-        // DEBUG: Log the actual options being used (verbose mode only)
-        logger.verbose(`URL Tracker Constructor Debug:`);
-        logger.verbose(`  - enableApiUpload: ${this.options.enableApiUpload} (type: ${typeof this.options.enableApiUpload})`);
-        logger.verbose(`  - enableApiUpload from options: ${options.enableApiUpload} (type: ${typeof options.enableApiUpload})`);
-        logger.verbose(`  - testName: ${this.options.testName}`);
-        logger.verbose(`  - specFile: ${this.options.specFile}`);
+        // DEBUG: Always log initialization info
+        logger.info(`URL Tracker initializing for: ${this.options.testName}`);
+        logger.info(`API upload enabled: ${this.options.enableApiUpload}`);
+        
+        // Only enable verbose mode if explicitly requested
+        if (this.options.verbose && !logger.verboseMode) {
+            process.env.DEBUG_URL_TRACKER = 'true';
+            logger.verboseMode = true;
+            logger.info('Verbose mode enabled for URL tracking debugging');
+        }
+        
+        // Only log verbose messages if verbose mode is enabled
+        if (logger.verboseMode) {
+            logger.verbose(`URL Tracker Constructor Debug:`);
+            logger.verbose(`  - enableApiUpload: ${this.options.enableApiUpload} (type: ${typeof this.options.enableApiUpload})`);
+            logger.verbose(`  - enableApiUpload from options: ${options.enableApiUpload} (type: ${typeof options.enableApiUpload})`);
+            logger.verbose(`  - testName: ${this.options.testName}`);
+            logger.verbose(`  - specFile: ${this.options.specFile}`);
+        }
         
         // Don't use hardcoded spec file names
         if (this.options.specFile === 'unknown') {
@@ -46,16 +100,25 @@ class UrlTrackerPlugin extends EventEmitter {
         
         // Initialize API uploader if enabled
         if (this.options.enableApiUpload) {
-            logger.verbose('API upload is enabled, initializing API uploader...');
-            this.apiUploader = ApiUploader.forPlaywright({
-                apiEndpoint: this.options.apiEndpoint,
-                username: this.options.username,
-                accessKey: this.options.accessKey,
-                verbose: options.verbose || false  // Pass through verbose option
-            });
-            logger.verbose('API uploader initialized successfully');
+            logger.info('API upload is enabled, initializing API uploader...');
+            try {
+                if (!ApiUploader) {
+                    throw new Error('ApiUploader class not available');
+                }
+                this.apiUploader = ApiUploader.forPlaywright({
+                    apiEndpoint: this.options.apiEndpoint,
+                    username: this.options.username,
+                    accessKey: this.options.accessKey,
+                    verbose: options.verbose || false  // Pass through verbose option
+                });
+                logger.success('API uploader initialized successfully');
+            } catch (error) {
+                logger.error(`Failed to initialize API uploader: ${error.message}`);
+                this.options.enableApiUpload = false; // Disable API upload on failure
+                this.apiUploader = null;
+            }
         } else {
-            logger.verbose('API upload is disabled');
+            logger.warn('API upload is disabled');
         }
         
         // Initialize properties
@@ -204,7 +267,7 @@ class UrlTrackerPlugin extends EventEmitter {
         this.trackingResults = [];
 
         try {
-            logger.verbose(`Initializing URL tracker for test: ${this.options.testName}`);
+            logger.info(`Initializing URL tracker for test: ${this.options.testName}`);
             
             // CRITICAL: Fetch test metadata first - this must happen for every test session
             await this.fetchTestMetadataWithRetry();
@@ -247,7 +310,30 @@ class UrlTrackerPlugin extends EventEmitter {
 
             await this.setupPageListeners();
             this.isInitialized = true;
-            logger.verbose('URL tracker initialized successfully');
+            logger.success('URL tracker initialized successfully');
+            
+            // Force an immediate navigation check after a short delay
+            setTimeout(async () => {
+                try {
+                    const currentPageUrl = this.page.url();
+                    const normalizedCurrentUrl = this.normalizeUrl(currentPageUrl);
+                    
+                    if (normalizedCurrentUrl !== 'null' && normalizedCurrentUrl !== this.lastUrl) {
+                        logger.info(`Manual navigation check detected: ${normalizedCurrentUrl}`);
+                        this.addTrackingResult({
+                            spec_file: this.options.specFile,
+                            test_name: this.options.testName,
+                            previous_url: this.lastUrl || 'null',
+                            current_url: normalizedCurrentUrl,
+                            timestamp: new Date().toISOString(),
+                            navigation_type: 'manual_check'
+                        });
+                        this.lastUrl = normalizedCurrentUrl;
+                    }
+                } catch (e) {
+                    logger.verbose(`Manual navigation check failed: ${e.message}`);
+                }
+            }, 1000); // Check after 1 second
         } catch (error) {
             logger.error('Error initializing URL tracker:', error);
         }
@@ -265,6 +351,7 @@ class UrlTrackerPlugin extends EventEmitter {
         this.page.on('framenavigated', async (frame) => {
             if (frame === this.page.mainFrame()) {
                 const newUrl = this.normalizeUrl(frame.url());
+                logger.verbose(`Frame navigated event: ${newUrl}`);
                 
                 if (newUrl !== this.lastUrl && newUrl !== 'null') {
                     const oldUrl = this.lastUrl || 'null';
@@ -336,6 +423,7 @@ class UrlTrackerPlugin extends EventEmitter {
             try {
                 await this.page.exposeFunction('__trackHistoryChange', (url, type) => {
                     const newUrl = this.normalizeUrl(url);
+                    logger.verbose(`History change detected: ${url} -> ${newUrl} (type: ${type})`);
                     if (newUrl !== this.lastUrl && newUrl !== 'null') {
                         const oldUrl = this.lastUrl || 'null';
                         this.lastUrl = newUrl;
@@ -573,6 +661,28 @@ class UrlTrackerPlugin extends EventEmitter {
                 return await originalClick.apply(this.page, [selector, options]);
             };
             
+            // Add recordNavigation method to page object
+            this.page.recordNavigation = async (url) => {
+                const currentUrl = url || this.page.url();
+                const normalizedUrl = this.normalizeUrl(currentUrl);
+                
+                if (normalizedUrl !== 'null' && normalizedUrl !== this.lastUrl) {
+                    const oldUrl = this.lastUrl || 'null';
+                    this.lastUrl = normalizedUrl;
+                    
+                    this.addTrackingResult({
+                        spec_file: this.options.specFile,
+                        test_name: this.options.testName,
+                        previous_url: oldUrl,
+                        current_url: normalizedUrl,
+                        timestamp: new Date().toISOString(),
+                        navigation_type: 'manual_record'
+                    });
+                    
+                    logger.info(`Manual navigation recorded: ${oldUrl} → ${normalizedUrl}`);
+                }
+            };
+            
         } catch (e) {
             logger.error('Error setting up Playwright method interception:', e);
         }
@@ -633,8 +743,8 @@ class UrlTrackerPlugin extends EventEmitter {
         
         this.cleanupCalled = true; // Mark as cleaned up
         
-        // ENHANCED DEBUG: Log cleanup entry only in verbose mode
-        logger.verbose(`[UrlTracker] === CLEANUP START ===`);
+        // ENHANCED DEBUG: Log cleanup entry 
+        logger.info(`URL Tracker cleanup starting for: ${this.options.testName}`);
         logger.verbose(`[UrlTracker] Test name: ${this.options.testName}`);
         logger.verbose(`[UrlTracker] API upload enabled: ${this.options.enableApiUpload} (type: ${typeof this.options.enableApiUpload})`);
         logger.verbose(`[UrlTracker] API uploader exists: ${!!this.apiUploader}`);
@@ -736,7 +846,7 @@ class UrlTrackerPlugin extends EventEmitter {
                         trackingType: 'url-tracker',
                         framework: 'Playwright'
                     });
-                    logger.apiUpload('Upload completed successfully');
+                    logger.success('API upload completed successfully');
                     
                     // Store the success for later reporting
                     if (!global._urlTrackerApiSuccesses) {
@@ -789,32 +899,39 @@ class UrlTrackerPlugin extends EventEmitter {
                 logger.info('Generating HTML report for Playwright URL tracking...');
                 
                 // Create session data format expected by HtmlReporter
-                const sessionData = [{
+                const sessionData = {
                     metadata: this.testMetadata || {},
                     navigations: this.trackingResults,
                     session_id: this.testMetadata?.session_id || this.testMetadata?.build_id || `session_${Date.now()}`,
                     spec_file: this.options.specFile
-                }];
+                };
                 
-                const htmlReporter = new HtmlReporter({
-                    outputDir: 'test-results',
-                    title: 'LambdaTest Playwright URL Tracking Report',
-                    theme: 'dark',
-                    enableKeyboardShortcut: false // Disable in test environment
-                });
+                // Create or get the global HTML reporter
+                if (!globalHtmlReporter) {
+                    globalHtmlReporter = new HtmlReporter({
+                        outputDir: 'test-results',
+                        title: 'LambdaTest Playwright URL Tracking Report',
+                        theme: 'dark',
+                        enableKeyboardShortcut: true
+                    });
+                }
                 
-                const htmlReportPath = htmlReporter.generateReport(sessionData, 'playwright');
+                const htmlReportPath = globalHtmlReporter.generateReport([sessionData], 'playwright');
                 logger.success(`HTML report generated: ${htmlReportPath}`);
                 
-                // Show keyboard shortcut info
-                logger.info('📊 HTML Report Available!');
-                logger.info(`   File: ${htmlReportPath}`);
-                logger.info('   Command: npx lt-report --open');
-                logger.info('   Or manually open the HTML file in your browser');
+                // Show the keyboard shortcut prompt only after all tests
+                // Check if this is the last test cleanup
+                const registry = global._urlTrackerRegistry;
+                if (registry && registry.trackers && registry.trackers.size === 1) {
+                    allTestsComplete = true;
+                }
+                
+                if (allTestsComplete) {
+                    showHtmlReportPrompt(globalHtmlReporter, htmlReportPath);
+                }
                 
             } catch (htmlError) {
                 logger.warn(`Failed to generate HTML report: ${htmlError.message}`);
-                // Don't throw here, as cleanup should continue
             }
         }
         
@@ -1203,6 +1320,9 @@ class UrlTrackerPlugin extends EventEmitter {
         
         // Add the result to the array
         this.trackingResults.push(finalResult);
+        
+        // Log the navigation event
+        logger.navigation(`${finalResult.previous_url} → ${finalResult.current_url} (${navigation_type})`);
         
         // Write results to file immediately after each addition to prevent data loss
         this.saveResultsToFile();
@@ -1601,20 +1721,101 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
         try {
             // Try to get from process.argv
             const args = process.argv || [];
+            
+            // Method 1: Check for direct spec file references in args
             for (let i = 0; i < args.length; i++) {
                 const arg = args[i];
+                // Check for direct spec file references
                 if (arg.includes('.spec.js') || arg.includes('.test.js')) {
                     return path.basename(arg);
                 }
+                // Check for --spec or similar flags followed by a file
+                if ((arg === '--spec' || arg.startsWith('--spec=')) && i + 1 < args.length) {
+                    const nextArg = arg.startsWith('--spec=') ? arg.split('=')[1] : args[i + 1];
+                    if (nextArg && (nextArg.includes('.spec.js') || nextArg.includes('.test.js'))) {
+                        return path.basename(nextArg);
+                    }
+                }
             }
             
-            // Try to get from environment variables
-            if (process.env.PLAYWRIGHT_TEST_FILE) {
-                return path.basename(process.env.PLAYWRIGHT_TEST_FILE);
+            // Method 2: Check the full command line for paths
+            const fullCommand = args.join(' ');
+            
+            // Enhanced Windows paths detection (more patterns)
+            const windowsPatterns = [
+                /tests[\\\/]([^\\\/\s]+\.spec\.js)/,  // tests\file.spec.js or tests/file.spec.js
+                /test[\\\/]([^\\\/\s]+\.spec\.js)/,   // test\file.spec.js or test/file.spec.js  
+                /([^\\\/\s]+\.spec\.js)/,             // any file.spec.js
+                /([^\\\/\s]+\.test\.js)/              // any file.test.js
+            ];
+            
+            for (const pattern of windowsPatterns) {
+                const match = fullCommand.match(pattern);
+                if (match && match[1]) {
+                    logger.verbose(`Detected spec file from command line: ${match[1]}`);
+                    return match[1];
+                }
+            }
+            
+            // Method 3: Check environment variables set by Playwright
+            const envVars = [
+                'PLAYWRIGHT_TEST_FILE',
+                'JEST_WORKER_ID', // Might contain test info
+                'npm_config_argv' // npm run command args
+            ];
+            
+            for (const envVar of envVars) {
+                if (process.env[envVar]) {
+                    const envValue = process.env[envVar];
+                    const specMatch = envValue.match(/([^\\\/\s]+\.spec\.js)/);
+                    if (specMatch) {
+                        logger.verbose(`Detected spec file from ${envVar}: ${specMatch[1]}`);
+                        return specMatch[1];
+                    }
+                }
+            }
+            
+            // Method 4: Check current working directory for spec files (last resort)
+            try {
+                const fs = require('fs');
+                const cwd = process.cwd();
+                
+                // Check common test directories
+                const testDirs = ['tests', 'test', 'spec', 'specs', '.'];
+                
+                for (const testDir of testDirs) {
+                    const fullTestDir = path.join(cwd, testDir);
+                    if (fs.existsSync(fullTestDir)) {
+                        const files = fs.readdirSync(fullTestDir);
+                        const specFiles = files.filter(file => 
+                            file.endsWith('.spec.js') || file.endsWith('.test.js')
+                        );
+                        
+                        if (specFiles.length === 1) {
+                            // If there's only one spec file, use it
+                            logger.verbose(`Auto-detected single spec file: ${specFiles[0]}`);
+                            return specFiles[0];
+                        } else if (specFiles.length > 1) {
+                            // If multiple spec files, try to find one that matches current test context
+                            // This is a heuristic and may not always be accurate
+                            const likelyFiles = specFiles.filter(file => 
+                                fullCommand.toLowerCase().includes(file.toLowerCase().replace('.spec.js', ''))
+                            );
+                            if (likelyFiles.length === 1) {
+                                logger.verbose(`Auto-detected likely spec file: ${likelyFiles[0]}`);
+                                return likelyFiles[0];
+                            }
+                        }
+                    }
+                }
+            } catch (fsError) {
+                // Ignore filesystem errors
+                logger.verbose(`Filesystem detection failed: ${fsError.message}`);
             }
             
             return null;
         } catch (e) {
+            logger.verbose(`Spec file detection error: ${e.message}`);
             return null;
         }
     }
@@ -1625,16 +1826,41 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
             const stack = new Error().stack;
             const lines = stack.split('\n');
             
+            // Look through stack trace for test files
             for (const line of lines) {
                 if (line.includes('.spec.js') || line.includes('.test.js')) {
-                    const match = line.match(/([^\/\\]+\.(?:spec|test)\.js)/);
-                    if (match) {
+                    // Try different patterns to extract the filename
+                    const patterns = [
+                        /([^\/\\]+\.(?:spec|test)\.js)/,           // Basic filename extraction
+                        /tests[\\\/]([^\\\/\s]+\.spec\.js)/,       // tests/filename.spec.js
+                        /test[\\\/]([^\\\/\s]+\.spec\.js)/,        // test/filename.spec.js
+                        /at.*?([^\/\\]+\.(?:spec|test)\.js)/       // from "at" stack traces
+                    ];
+                    
+                    for (const pattern of patterns) {
+                        const match = line.match(pattern);
+                        if (match && match[1]) {
+                            logger.verbose(`Detected spec file from stack trace: ${match[1]}`);
+                            return match[1];
+                        }
+                    }
+                }
+            }
+            
+            // If no direct matches, try to find any .js file that might be a test
+            for (const line of lines) {
+                if (line.includes('test') && line.includes('.js')) {
+                    const match = line.match(/([^\/\\]+\.js)/);
+                    if (match && match[1] && (match[1].includes('test') || match[1].includes('spec'))) {
+                        logger.verbose(`Detected possible test file from stack trace: ${match[1]}`);
                         return match[1];
                     }
                 }
             }
+            
             return null;
         } catch (e) {
+            logger.verbose(`Stack trace detection failed: ${e.message}`);
             return null;
         }
     }
@@ -1656,12 +1882,38 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
         }
     }
 
-    // Detect spec file using multiple methods
-    const specFile = detectSpecFileFromEnvironment() || 
-                     getTestFileFromStack() || 
-                     'unknown.spec.js';
+    // Helper function to detect spec file from Playwright test context
+    function getSpecFileFromPlaywrightContext() {
+        try {
+            // Check if we're in a Playwright test context
+            if (typeof test !== 'undefined' && test.info) {
+                const testInfo = test.info();
+                if (testInfo.file) {
+                    return path.basename(testInfo.file);
+                }
+            }
+            
+            // Try to access global test context
+            if (global.__playwright_test_info && global.__playwright_test_info.file) {
+                return path.basename(global.__playwright_test_info.file);
+            }
+            
+            return null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    // Detect spec file using multiple methods, prioritizing automatic detection
+    const detectedSpecFile = detectSpecFileFromEnvironment() || 
+                             getTestFileFromStack() || 
+                             getSpecFileFromPlaywrightContext() ||
+                             options.specFile ||  // Only use user input as fallback
+                             'unknown.spec.js';
+    const specFile = detectedSpecFile;
 
     // Log detected configuration
+    logger.info(`URL Tracker Fixture created - Spec: ${specFile}`);
     logger.verbose(`=== URL TRACKER FIXTURE CONFIGURATION ===`);
     logger.verbose(`Detected spec file: ${specFile}`);
     logger.verbose(`Options passed: ${JSON.stringify(options, null, 2)}`);
@@ -1795,10 +2047,30 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
             const testName = testInfo.title ? testInfo.title.replace(/\s+/g, '_').toLowerCase() : 'unknown_test';
             const uniqueTestId = `${testName}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
             
+            // Try to get spec file from testInfo first (most accurate)
+            let actualSpecFile = specFile;
+            if (testInfo && testInfo.file) {
+                actualSpecFile = path.basename(testInfo.file);
+                logger.verbose(`Spec file detected from testInfo: ${actualSpecFile}`);
+            } else if (testInfo && testInfo._projectConfig && testInfo._projectConfig.testDir) {
+                // Try to extract from project config
+                try {
+                    const testDir = testInfo._projectConfig.testDir;
+                    const cwdFiles = fs.readdirSync(testDir).filter(f => f.endsWith('.spec.js'));
+                    if (cwdFiles.length === 1) {
+                        actualSpecFile = cwdFiles[0];
+                        logger.verbose(`Spec file detected from project testDir: ${actualSpecFile}`);
+                    }
+                } catch (fsError) {
+                    // Ignore filesystem errors
+                    logger.verbose(`Project testDir detection failed: ${fsError.message}`);
+                }
+            }
+            
             const urlTracker = new UrlTrackerPlugin(page, {
                 ...options,
                 testName: options.testName || testName,
-                specFile: specFile,  // Force the spec file to be what we detected
+                specFile: actualSpecFile,  // Use the most accurate spec file we can find
                 verbose: options.verbose || false  // Pass through verbose option
             });
 
@@ -1809,7 +2081,8 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
             try {
                 // Initialize the tracker
                 await urlTracker.init();
-                logger.verbose(`URL tracker initialized for test: ${testName}`);
+                logger.info(`URL tracker initialized for test: ${testName}`);
+                logger.info(`Tracker stored in global registry with ID: ${uniqueTestId}`);
             } catch (error) {
                 logger.error(`Error initializing URL tracker for test ${testName}:`, error);
             }
@@ -1873,6 +2146,33 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
                     await cleanupFunction();
                 }
             }, 30000); // 30 seconds timeout instead of 5 minutes
+            
+            // 5. Force cleanup on page close events
+            if (page && typeof page.on === 'function') {
+                page.on('close', async () => {
+                    logger.info(`Page close event detected for test: ${testName}`);
+                    if (global._urlTrackerRegistry.trackers.has(uniqueTestId)) {
+                        await cleanupFunction();
+                    }
+                });
+            }
+            
+            // 6. Add process exit handler specific to this test
+            const processExitHandler = async () => {
+                if (global._urlTrackerRegistry.trackers.has(uniqueTestId)) {
+                    logger.info(`Process exit handler triggered for test: ${testName}`);
+                    await cleanupFunction();
+                }
+            };
+            
+            if (!global._testSpecificExitHandlers) {
+                global._testSpecificExitHandlers = new Set();
+            }
+            
+            if (!global._testSpecificExitHandlers.has(testName)) {
+                process.on('beforeExit', processExitHandler);
+                global._testSpecificExitHandlers.add(testName);
+            }
         },
         
         // Setup a handler that will be executed after each test
@@ -1910,6 +2210,34 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
                     urlTracker.exportResults();
                 } catch (exportError) {
                     logger.error(`Error exporting final tracking results for test ${testInfo.title}:`, exportError);
+                }
+            }
+            
+            // Check if this is the last test
+            if (testInfo.workerIndex === 0) {  // Only check in the first worker
+                const remainingTests = testInfo.project.metadata.totalTestCount - testInfo.testId;
+                if (remainingTests === 0) {
+                    // This is the last test
+                    process.env.PLAYWRIGHT_TEST_END = 'true';
+                    global._playwrightAllTestsComplete = true;
+                    
+                    // Show the HTML report prompt
+                    const resultsDir = path.join(process.cwd(), 'test-results');
+                    const reportPath = path.join(resultsDir, 'url-tracking-report.html');
+                    if (fs.existsSync(reportPath)) {
+                        // Add a small delay to ensure this shows after all test output
+                        setTimeout(() => {
+                            console.log('\n');
+                            console.log('  URL Tracking Report is ready:');
+                            console.log(`  ${reportPath}`);
+                            console.log('\n  Press "o" to open the report in your browser');
+                            console.log('  Press "Ctrl+C" to exit\n');
+                            
+                            if (globalHtmlReporter) {
+                                globalHtmlReporter.setupKeyboardShortcut();
+                            }
+                        }, 500);
+                    }
                 }
             }
         }
@@ -2054,6 +2382,9 @@ function performGlobalUrlTrackerCleanup() {
                 return;
             }
             
+            // Set flag to indicate all tests are complete
+            allTestsComplete = true;
+            
             // Clean up all remaining trackers
             if (registry.trackers && registry.trackers.size > 0) {
                 logger.info(`Cleaning up ${registry.trackers.size} remaining URL trackers`);
@@ -2095,6 +2426,15 @@ function performGlobalUrlTrackerCleanup() {
                 generateApiUploadReport();
             } catch (error) {
                 logger.error('Error generating API upload report:', error);
+            }
+            
+            // Show the HTML report prompt at the very end
+            if (globalHtmlReporter) {
+                const resultsDir = path.join(process.cwd(), 'test-results');
+                const reportPath = path.join(resultsDir, 'url-tracking-report.html');
+                if (fs.existsSync(reportPath)) {
+                    showHtmlReportPrompt(globalHtmlReporter, reportPath);
+                }
             }
             
             logger.info('=== GLOBAL URL TRACKER CLEANUP COMPLETED ===');

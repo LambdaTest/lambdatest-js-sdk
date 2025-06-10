@@ -29,7 +29,10 @@ class UrlTrackerLogger {
         return !!(process.env.DEBUG_URL_TRACKER || 
                  process.env.LT_VERBOSE || 
                  process.env.VERBOSE || 
-                 process.env.DEBUG);
+                 process.env.DEBUG ||
+                 process.env.NODE_ENV === 'debug' ||
+                 process.argv.includes('--verbose') ||
+                 process.argv.includes('-v'));
     }
 
     /**
@@ -232,11 +235,11 @@ class ContextLogger {
     }
 }
 
-// Create and export a singleton instance
+// Create default logger instance
 const logger = new UrlTrackerLogger();
 
 module.exports = {
     UrlTrackerLogger,
-    logger,
-    colors
+    ContextLogger,
+    logger
 }; 

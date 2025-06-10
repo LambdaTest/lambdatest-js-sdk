@@ -1,7 +1,7 @@
 const https = require("https");
 const http = require("http");
 const { URL } = require("url");
-const { logger } = require("./logger");
+const { logger } = require("./insights-logger");
 
 /**
  * Framework-agnostic API uploader for LambdaTest Insights
@@ -9,7 +9,6 @@ const { logger } = require("./logger");
  */
 class ApiUploader {
   constructor(options = {}) {
-    console.log("ApiUploader constructor called");
     this.apiEndpoint =
       options.apiEndpoint ||
       "https://stage-api.lambdatestinternal.com/insights/api/v3/queue";
@@ -43,114 +42,29 @@ class ApiUploader {
    * @returns {boolean} - Whether verbose mode is enabled
    */
   checkVerboseMode() {
-    let verboseReasons = [];
+    // Check environment variables
+    const debugUrlTracker = process.env.DEBUG_URL_TRACKER === 'true';
+    const debugColors = process.env.DEBUG_COLORS === '1';
+    const debugApiUploader = process.env.DEBUG_API_UPLOADER === 'true';
+    const apiVerbose = process.env.API_VERBOSE === 'true';
+    const verbose = process.env.VERBOSE === 'true';
 
-    // Check command line arguments in multiple ways
-    if (typeof process !== "undefined" && process.argv) {
-      // Direct check for --verbose flag
-      if (process.argv.includes("--verbose") || process.argv.includes("-v")) {
-        verboseReasons.push("command line --verbose or -v flag");
-      }
+    // Determine if verbose mode is enabled by any method
+    const isVerboseEnabled = debugUrlTracker || debugApiUploader || apiVerbose || verbose;
 
-      // Check for npm run script with --verbose
-      const argv = process.argv.join(" ");
-      if (
-        argv.includes("--verbose") ||
-        argv.includes(" -v ") ||
-        argv.includes(" -v")
-      ) {
-        verboseReasons.push("command line arguments contain verbose");
-      }
-
-      // Check for playwright test with --verbose
-      if (argv.includes("playwright") && argv.includes("verbose")) {
-        verboseReasons.push("playwright verbose in command line");
-      }
+    console.log('[ApiUploader] Verbose mode detection:');
+    console.log('  Result:', isVerboseEnabled);
+    if (isVerboseEnabled) {
+        console.log('  Enabled by:', [
+            debugUrlTracker && 'environment variable DEBUG_URL_TRACKER=true',
+            debugColors && 'dynamic debug env var DEBUG_COLORS=1',
+            debugUrlTracker && 'dynamic debug env var DEBUG_URL_TRACKER=true',
+            apiVerbose && 'API_VERBOSE=true',
+            verbose && 'VERBOSE=true'
+        ].filter(Boolean).join(', '));
     }
 
-    // Check environment variables (multiple variations)
-    if (typeof process !== "undefined" && process.env) {
-      const envChecks = [
-        "VERBOSE",
-        "DEBUG_API_UPLOADER",
-        "API_VERBOSE",
-        "DEBUG",
-        "PLAYWRIGHT_DEBUG",
-        "DEBUG_URL_TRACKER",
-      ];
-
-      for (const envVar of envChecks) {
-        if (process.env[envVar] === "true" || process.env[envVar] === "1") {
-          verboseReasons.push(
-            `environment variable ${envVar}=${process.env[envVar]}`
-          );
-        }
-      }
-
-      // Special check for NODE_ENV
-      if (process.env.NODE_ENV === "debug") {
-        verboseReasons.push("NODE_ENV=debug");
-      }
-
-      // Check for any debug-related environment variables
-      const debugVars = Object.keys(process.env).filter(
-        (key) =>
-          key.toLowerCase().includes("verbose") ||
-          key.toLowerCase().includes("debug")
-      );
-
-      for (const key of debugVars) {
-        if (process.env[key] === "true" || process.env[key] === "1") {
-          verboseReasons.push(
-            `dynamic debug env var ${key}=${process.env[key]}`
-          );
-        }
-      }
-    }
-
-    // Check if npm was called with --verbose by looking at npm config
-    try {
-      if (typeof process !== "undefined" && process.env.npm_config_loglevel) {
-        if (
-          process.env.npm_config_loglevel === "verbose" ||
-          process.env.npm_config_loglevel === "silly"
-        ) {
-          verboseReasons.push(
-            `npm config loglevel: ${process.env.npm_config_loglevel}`
-          );
-        }
-      }
-
-      // Check npm_config_verbose specifically
-      if (process.env.npm_config_verbose === "true") {
-        verboseReasons.push("npm_config_verbose=true");
-      }
-    } catch (e) {
-      // Ignore errors in npm config check
-    }
-
-    const isVerbose = verboseReasons.length > 0;
-
-    // Always log the verbose mode detection result for debugging
-    console.log(`[ApiUploader] Verbose mode detection:`);
-    console.log(`  Result: ${isVerbose}`);
-    if (isVerbose) {
-      console.log(`  Enabled by: ${verboseReasons.join(", ")}`);
-    } else {
-      console.log(`  No verbose flags detected`);
-      console.log(
-        `  Checked environment variables: ${
-          Object.keys(process.env || {})
-            .filter((k) => k.includes("DEBUG") || k.includes("VERBOSE"))
-            .join(", ") || "none"
-        }`
-      );
-      console.log(
-        `  Command line args: ${process.argv ? process.argv.join(" ") : "none"}`
-      );
-    }
-
-    return isVerbose;
+    return isVerboseEnabled;
   }
 
   /**
@@ -195,21 +109,23 @@ class ApiUploader {
     const trackingType = options.trackingType || this.defaultTrackingType;
     const framework = options.framework || "SDK";
 
-    // ENHANCED DEBUG: Always log entry to this method
-    console.log(`[ApiUploader] uploadTrackingResults called`);
-    console.log(`  Test ID: ${testId}`);
-    console.log(`  Tracking Type: ${trackingType}`);
-    console.log(`  Framework: ${framework}`);
-    console.log(`  Has tracking data: ${!!trackingData}`);
-    console.log(
-      `  Navigation count: ${
-        trackingData && trackingData.navigations
-          ? trackingData.navigations.length
-          : 0
-      }`
-    );
-    console.log(`  Verbose mode: ${this.verboseMode}`);
-    console.log(`  Auth token available: ${!!this.authToken}`);
+    // ENHANCED DEBUG: Log entry to this method only in verbose mode
+    if (this.verboseMode) {
+      console.log(`[ApiUploader] uploadTrackingResults called`);
+      console.log(`  Test ID: ${testId}`);
+      console.log(`  Tracking Type: ${trackingType}`);
+      console.log(`  Framework: ${framework}`);
+      console.log(`  Has tracking data: ${!!trackingData}`);
+      console.log(
+        `  Navigation count: ${
+          trackingData && trackingData.navigations
+            ? trackingData.navigations.length
+            : 0
+        }`
+      );
+      console.log(`  Verbose mode: ${this.verboseMode}`);
+      console.log(`  Auth token available: ${!!this.authToken}`);
+    }
 
     logger.apiUpload(`Uploading ${trackingType} results for test: ${testId}`);
 
@@ -231,7 +147,9 @@ class ApiUploader {
     if (!this.authToken) {
       const error =
         "No authentication credentials provided. Set LT_USERNAME and LT_ACCESS_KEY environment variables or pass username/accessKey in options.";
-      console.log(`[ApiUploader] AUTH ERROR: ${error}`);
+      if (this.verboseMode) {
+        console.log(`[ApiUploader] AUTH ERROR: ${error}`);
+      }
       logger.error(error);
       throw new Error(error);
     }
@@ -246,18 +164,22 @@ class ApiUploader {
       type: trackingType,
     };
 
-    console.log(
-      `[ApiUploader] Prepared payload with ${payload.data.navigations.length} navigations`
-    );
+    if (this.verboseMode) {
+      console.log(
+        `[ApiUploader] Prepared payload with ${payload.data.navigations.length} navigations`
+      );
+    }
 
     let lastError = null;
 
     // Retry logic with exponential backoff
     for (let attempt = 1; attempt <= this.retryAttempts; attempt++) {
       try {
-        console.log(
-          `[ApiUploader] Making API request - attempt ${attempt}/${this.retryAttempts}`
-        );
+        if (this.verboseMode) {
+          console.log(
+            `[ApiUploader] Making API request - attempt ${attempt}/${this.retryAttempts}`
+          );
+        }
 
         if (this.verboseMode && attempt > 1) {
           logger.apiUpload(`Retry attempt ${attempt}/${this.retryAttempts}`);
@@ -265,9 +187,11 @@ class ApiUploader {
 
         const response = await this.makeHttpRequest(payload, framework);
 
-        console.log(
-          `[ApiUploader] API request successful on attempt ${attempt}`
-        );
+        if (this.verboseMode) {
+          console.log(
+            `[ApiUploader] API request successful on attempt ${attempt}`
+          );
+        }
         logger.apiUpload("Upload successful");
         if (this.verboseMode) {
           logger.apiUpload(
@@ -277,9 +201,11 @@ class ApiUploader {
         return response;
       } catch (error) {
         lastError = error;
-        console.log(
-          `[ApiUploader] Upload attempt ${attempt}/${this.retryAttempts} failed: ${error.message}`
-        );
+        if (this.verboseMode) {
+          console.log(
+            `[ApiUploader] Upload attempt ${attempt}/${this.retryAttempts} failed: ${error.message}`
+          );
+        }
         logger.error(
           `Upload attempt ${attempt}/${this.retryAttempts} failed: ${error.message}`
         );
@@ -298,13 +224,15 @@ class ApiUploader {
 
         if (attempt < this.retryAttempts) {
           const delay = this.retryDelay * Math.pow(2, attempt - 1); // Exponential backoff
-          console.log(`[ApiUploader] Waiting ${delay}ms before retry...`);
           if (this.verboseMode) {
+            console.log(`[ApiUploader] Waiting ${delay}ms before retry...`);
             logger.apiUpload(`⏳ Waiting ${delay}ms before retry...`);
           }
           await this.sleep(delay);
         } else {
-          console.log(`[ApiUploader] All retry attempts exhausted`);
+          if (this.verboseMode) {
+            console.log(`[ApiUploader] All retry attempts exhausted`);
+          }
           logger.error("All retry attempts exhausted");
           if (error.response) {
             logger.error(`Error Response Status: ${error.response.statusCode}`);
@@ -322,9 +250,11 @@ class ApiUploader {
       }
     }
 
-    console.log(
-      `[ApiUploader] Upload failed after all retries: ${lastError.message}`
-    );
+    if (this.verboseMode) {
+      console.log(
+        `[ApiUploader] Upload failed after all retries: ${lastError.message}`
+      );
+    }
     throw lastError;
   }
 

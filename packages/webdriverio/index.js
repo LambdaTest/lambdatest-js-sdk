@@ -3,7 +3,7 @@ const UrlTracker = require('./src/insights/url-tracker');
 const UrlTrackerService = require('./src/insights/url-tracker-service');
 const { enhanceConfigWithUrlTracking } = require('./src/insights/hooks');
 const { ApiUploader } = require('../sdk-utils/src/insights/api-uploader');
-const { logger, UrlTrackerLogger } = require('../sdk-utils/src/insights/logger');
+const { logger, UrlTrackerLogger } = require('../sdk-utils/src/insights/insights-logger');
 const { enableVerboseMode: universalEnableVerbose, runDebugScript } = require('../sdk-utils');
 
 /**

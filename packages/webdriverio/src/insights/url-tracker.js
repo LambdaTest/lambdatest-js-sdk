@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 // Import ApiUploader from common sdk-utils package
 const { ApiUploader } = require('../../../sdk-utils/src/insights/api-uploader');
-const { logger } = require('../../../sdk-utils/src/insights/logger');
+const { logger } = require('../../../sdk-utils/src/insights/insights-logger');
 
 // Import HTML Reporter
 let HtmlReporter = null;

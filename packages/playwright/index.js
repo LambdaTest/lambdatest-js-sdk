@@ -1,8 +1,15 @@
 const { smartuiSnapshot } = require('./src/smartui');
 const UrlTrackerPlugin = require('./src/insights/url-tracker');
 const { createUrlTrackerFixture, performGlobalUrlTrackerCleanup } = require('./src/insights/url-tracker');
-const { ApiUploader } = require('../sdk-utils/src/insights/api-uploader');
-const { logger, UrlTrackerLogger } = require('../sdk-utils/src/insights/logger');
+const { logger, UrlTrackerLogger } = require('../sdk-utils/src/insights/insights-logger');
+
+// Import ApiUploader with error handling to avoid initialization issues
+let ApiUploader = null;
+try {
+    ApiUploader = require('../sdk-utils/src/insights/api-uploader');
+} catch (e) {
+    console.warn('ApiUploader not available:', e.message);
+}
 const { enableVerboseMode: universalEnableVerbose, runDebugScript } = require('../sdk-utils');
 
 /**
@@ -17,6 +24,7 @@ function enableVerboseMode() {
 
 /**
  * Create URL tracker fixture with verbose option
+ * Note: specFile is automatically detected from command line arguments - no need to specify manually
  */
 function createVerboseUrlTrackerFixture(options = {}) {
     return createUrlTrackerFixture({
