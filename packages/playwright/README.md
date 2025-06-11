@@ -10,11 +10,148 @@ npm install @lambdatest/playwright-driver
 
 ## URL Tracking
 
-The SDK includes a comprehensive URL tracker plugin that captures and monitors all page navigations in your Playwright tests.
+The SDK includes a comprehensive URL tracker plugin that captures and monitors all page navigations in your Playwright tests. **The URL tracker is now completely self-contained and requires no setup files or configuration!**
 
-### Basic Setup
+### Quick Start (Recommended)
 
-Import and initialize the UrlTrackerPlugin in your test files:
+The easiest way to use URL tracking is with the self-contained fixture approach:
+
+```javascript
+const { test, expect } = require('@playwright/test');
+const { createUrlTrackerFixture } = require('@lambdatest/playwright-driver');
+
+// Set up authentication for API upload (optional)
+process.env.LT_USERNAME = 'your-lambdatest-username';
+process.env.LT_ACCESS_KEY = 'your-lambdatest-access-key';
+
+// Create the URL tracker fixture - this is ALL you need!
+const urlTrackerFixture = createUrlTrackerFixture({
+    enabled: true,
+    trackHashChanges: true,
+    preserveHistory: true,
+    enableApiUpload: true  // Default: true
+});
+
+// Use the fixture in your tests
+test.use(urlTrackerFixture);
+
+test.describe('My Tests', () => {
+    test('should track URLs automatically', async ({ page }) => {
+        // Just navigate normally - tracking happens automatically
+        await page.goto('https://example.com');
+        await page.goto('https://example.com/about');
+        await page.goto('https://example.com/contact');
+        
+        // No manual cleanup needed - it's all automatic!
+        // API upload and reporting happen automatically
+    });
+});
+```
+
+**That's it!** The URL tracker will automatically:
+- ✅ Initialize for each test
+- ✅ Track all navigation events (goto, back, forward, reload, SPA routes, hash changes)
+- ✅ Clean up after each test with API upload
+- ✅ Generate a comprehensive API upload report at the end
+- ✅ Handle process termination gracefully
+- ✅ Create output files in both `tests-results/` and `test-results/` directories
+
+### What You Get Automatically
+
+#### 1. **Zero Configuration Required**
+- No `globalSetup` or `globalTeardown` files needed
+- No manual cleanup in `afterEach` hooks
+- No process handlers in your code
+- No directory creation or file management
+
+#### 2. **Comprehensive Navigation Tracking**
+- Direct navigation (`page.goto()`)
+- Browser navigation (back, forward, reload)
+- SPA route changes (`history.pushState`, `history.replaceState`)
+- Hash changes (`window.location.hash`)
+- Form submissions and redirects
+- Link clicks and popstate events
+
+#### 3. **Automatic API Upload**
+- Uploads tracking results to LambdaTest insights API after each test
+- Retry logic with exponential backoff
+- Detailed success/failure reporting
+- Graceful degradation if upload fails
+
+#### 4. **Robust Error Handling**
+- Multiple cleanup triggers for maximum reliability
+- Process termination handlers (SIGINT, SIGTERM, uncaught exceptions)
+- Timeout-based fallback cleanup
+- Comprehensive error logging and reporting
+
+#### 5. **Detailed Reporting**
+At the end of your test run, you'll see a comprehensive report:
+
+```
+🔗 URL TRACKER - API UPLOAD REPORT
+============================================================
+✅ Successful uploads: 8
+   ✓ login_test (2024-01-15T10:30:25.123Z)
+   ✓ checkout_test (2024-01-15T10:31:15.456Z)
+   ...
+
+❌ Failed uploads: 0
+============================================================
+```
+
+### Advanced Usage
+
+#### Accessing Tracking Results During Tests
+
+```javascript
+test('should provide access to tracking results', async ({ page }, testInfo) => {
+    await page.goto('https://example.com');
+    await page.goto('https://example.com/products');
+    
+    // Access the URL tracker instance
+    const urlTracker = testInfo.urlTracker;
+    if (urlTracker) {
+        const trackingResults = urlTracker.getTrackingResults();
+        console.log(`Generated ${trackingResults.length} tracking results`);
+        
+        // Make assertions on tracking results
+        expect(trackingResults.length).toBeGreaterThan(0);
+        
+        const lastResult = trackingResults[trackingResults.length - 1];
+        expect(lastResult.current_url).toContain('products');
+        expect(lastResult.navigation_type).toBeDefined();
+    }
+});
+```
+
+#### Custom Configuration
+
+```javascript
+const urlTrackerFixture = createUrlTrackerFixture({
+    enabled: true,                    // Enable/disable tracking
+    trackHashChanges: true,           // Track hash changes
+    preserveHistory: true,            // Keep history after cleanup
+    enableApiUpload: true,            // Enable API upload
+    apiEndpoint: 'custom-endpoint',   // Custom API endpoint
+    username: 'custom-username',      // Custom username
+    accessKey: 'custom-access-key'    // Custom access key
+});
+```
+
+#### Manual Global Cleanup (Optional)
+
+If you need to trigger global cleanup manually:
+
+```javascript
+const { performGlobalUrlTrackerCleanup } = require('@lambdatest/playwright-driver');
+
+// Manually trigger global cleanup (usually not needed)
+await performGlobalUrlTrackerCleanup();
+```
+
+### Basic Setup (Alternative)
+
+If you prefer manual control, you can still use the UrlTrackerPlugin directly. **Note: As of version 1.0.6+, automatic cleanup is now built-in even for manual usage!**
 
 ```javascript
 const { chromium } = require('playwright');
@@ -30,7 +167,11 @@ const { UrlTrackerPlugin } = require('@lambdatest/playwright-driver');
     enabled: true,
     trackHashChanges: true,
     testName: 'my-test',
-    preserveHistory: true
+    preserveHistory: true,
+    // API upload options
+    enableApiUpload: true,
+    username: process.env.LT_USERNAME,
+    accessKey: process.env.LT_ACCESS_KEY
   });
   
   // Initialize the tracker
@@ -46,224 +187,123 @@ const { UrlTrackerPlugin } = require('@lambdatest/playwright-driver');
   // Export results to a JSON file
   urlTracker.exportResults('./url-results.json');
   
-  // Clean up
-  await urlTracker.destroy();
+  // Cleanup is now AUTOMATIC! You can still call it manually if needed:
+  // await urlTracker.cleanup();
+  
   await browser.close();
+  // The tracker will automatically clean up and upload results when the page/browser closes
 })();
 ```
 
-### Global Configuration Setup
-
-You can configure the URL tracker globally in your Playwright configuration to automatically track URLs across all tests:
-
-```javascript
-// playwright.config.js
-const { UrlTrackerPlugin } = require('@lambdatest/playwright-driver');
-const path = require('path');
-
-module.exports = {
-  testDir: './tests',
-  // Other Playwright config...
-  
-  // Define global setup/teardown files
-  globalSetup: './global-setup.js',
-  globalTeardown: './global-teardown.js',
-  
-  // Add URL tracker to page fixtures
-  use: {
-    // Other browser options...
-    
-    // Store URL tracker in context to make it available in tests
-    contextOptions: {
-      storageState: {}
-    }
-  }
-};
-```
-
-Then in your global setup file:
-
-```javascript
-// global-setup.js
-const { UrlTrackerPlugin } = require('@lambdatest/playwright-driver');
-
-module.exports = async (config) => {
-  // Setup global URL tracking state
-  global.urlTrackerState = {
-    results: [],
-    instances: new Map()
-  };
-  
-  // Add page fixture to create URL tracker for each page
-  const originalPage = config.fixtures.page;
-  config.fixtures.page = async (params, runTest) => {
-    const page = await originalPage(params);
-    
-    // Create URL tracker for this page
-    const testInfo = params.testInfo;
-    const urlTracker = new UrlTrackerPlugin(page, {
-      enabled: true,
-      testName: testInfo.title,
-      preserveHistory: true
-    });
-    
-    // Initialize URL tracker
-    await urlTracker.init();
-    
-    // Store tracker instance for this test
-    global.urlTrackerState.instances.set(testInfo.title, urlTracker);
-    
-    return page;
-  };
-};
-```
-
-And in your global teardown:
-
-```javascript
-// global-teardown.js
-const fs = require('fs');
-const path = require('path');
-
-module.exports = async (config) => {
-  // Export all URL tracking results
-  if (global.urlTrackerState) {
-    const results = [];
-    
-    // Collect results from all test instances
-    for (const [testName, tracker] of global.urlTrackerState.instances) {
-      results.push(...tracker.getTrackingResults());
-      await tracker.destroy();
-    }
-    
-    // Save consolidated results
-    const outputPath = path.join(process.cwd(), 'url-tracking-results.json');
-    fs.writeFileSync(outputPath, JSON.stringify(results, null, 2));
-    
-    console.log(`URL tracking results saved to ${outputPath}`);
-  }
-};
-```
-
-### Accessing Tracking Results
-
-You can access URL tracking results in several ways:
-
-#### 1. During Test Execution
-
-```javascript
-test('should navigate correctly', async ({ page }) => {
-  // Get the URL tracker instance for this test
-  const testInfo = test.info();
-  const urlTracker = global.urlTrackerState.instances.get(testInfo.title);
-  
-  await page.goto('https://example.com');
-  await page.click('a.nav-link');
-  
-  // Get current navigation history
-  const history = urlTracker.getNavigationHistory();
-  console.log('Navigation paths:', history.map(entry => entry.url));
-  
-  // Assert on navigation behavior
-  expect(history.length).toBeGreaterThan(1);
-  expect(history[history.length - 1].url).toContain('example.com/page');
-});
-```
-
-#### 2. From JSON Output File
-
-After your tests complete, you can analyze the consolidated JSON output file:
-
-```javascript
-const fs = require('fs');
-
-// Read the results file
-const results = JSON.parse(fs.readFileSync('./url-tracking-results.json', 'utf-8'));
-
-// Filter results by test
-const loginTestResults = results.filter(entry => entry.testName === 'login test');
-
-// Analyze navigation patterns
-const navigationSequence = loginTestResults.map(entry => ({
-  from: entry.fromUrl,
-  to: entry.toUrl,
-  type: entry.navigationType
-}));
-
-console.log('Navigation sequence:', navigationSequence);
-```
-
-The output JSON has this structure:
-
-```json
-[
-  {
-    "testName": "login test",
-    "navigationType": "navigation",
-    "fromUrl": "null",
-    "toUrl": "https://example.com/login"
-  },
-  {
-    "testName": "login test",
-    "navigationType": "pushstate",
-    "fromUrl": "https://example.com/login",
-    "toUrl": "https://example.com/dashboard"
-  }
-]
-```
-
-### Advanced Configuration
-
-The UrlTrackerPlugin accepts the following options:
-
-```javascript
-const options = {
-  enabled: true,           // Enable/disable tracking (default: true)
-  trackHashChanges: true,  // Track hash changes in URLs (default: true)
-  testName: 'my-test',     // Identify test in tracking results (default: 'unknown')
-  preserveHistory: true    // Keep history after destroy() (default: true)
-};
-
-const urlTracker = new UrlTrackerPlugin(page, options);
-```
-
-### Features
-
-The URL tracker provides these key features:
-
-- Tracks all page navigations including direct navigations, redirects, and back/forward buttons
-- Captures history API changes (pushState, replaceState)
-- Monitors hash changes in URLs (optional)
-- Normalizes URLs for consistent tracking
-- Provides navigation history with timestamps and navigation types
-- Exports results to JSON for analysis
-- Emits events for URL changes that you can listen to
-
-### Event Listening
-
-You can listen for URL change events:
-
-```javascript
-urlTracker.on('urlChange', ({ oldUrl, newUrl }) => {
-  console.log(`URL changed from ${oldUrl} to ${newUrl}`);
-});
-
-urlTracker.on('hashChange', ({ oldURL, newURL }) => {
-  console.log(`Hash changed from ${oldURL} to ${newURL}`);
-});
-```
-
-### API Reference
-
-- `init()` - Initialize the tracker and begin monitoring
-- `getNavigationHistory()` - Get all navigation entries
-- `getCurrentUrl()` - Get the current URL
-- `getTrackingResults()` - Get all tracking results
-- `exportResults(filepath)` - Save tracking data to JSON
-- `clearHistory()` - Clear navigation history
-- `destroy()` - Remove all listeners and clean up
-- `cleanup()` - Preserve history and clean up
+**Automatic Cleanup Features (NEW):**
+- ✅ Cleanup triggers automatically when page closes
+- ✅ Cleanup triggers automatically when browser context closes  
+- ✅ Cleanup triggers on process exit (SIGINT, SIGTERM)
+- ✅ Fallback timeout-based cleanup after 5 minutes
+- ✅ API upload happens automatically during cleanup
+- ✅ No manual cleanup() call required anymore
 
 ## SmartUI Integration
 
 For SmartUI integration, see the [SmartUI documentation](https://www.lambdatest.com/support/docs/smartui-integration-with-playwright/).
+
+## Logging and Reporting
+
+### Minimal Logging
+The URL tracker now uses minimal logging to reduce noise in test output. Only essential events are logged:
+
+- Tracker initialization and cleanup
+- Navigation events (only when they occur)
+- API upload status (success/failure)
+- Critical errors
+
+### API Upload Reporting
+After all tests complete, a comprehensive API upload report is generated that shows:
+
+- ✅ **Successful uploads**: Number of tests that successfully uploaded tracking data
+- ❌ **Failed uploads**: Number of tests that failed to upload, with error details
+- **Test run failure**: If any API uploads fail, the entire test run will fail with a detailed error report
+
+Example API upload report:
+```
+🔗 URL TRACKER - API UPLOAD REPORT
+============================================================
+✅ Successful uploads: 8
+   ✓ login_test (2024-01-15T10:30:25.123Z)
+   ✓ checkout_test (2024-01-15T10:31:15.456Z)
+   ...
+
+❌ Failed uploads: 2
+   ✗ payment_test: Request timeout after 30000ms (2024-01-15T10:32:05.789Z)
+   ✗ profile_test: HTTP 401: Unauthorized (2024-01-15T10:32:45.012Z)
+
+============================================================
+⚠️  API UPLOAD FAILURES DETECTED - TEST RUN FAILED
+============================================================
+```
+
+If API uploads fail, a detailed error report is saved to `api-upload-error-report.json` in your project root.
+
+### Error Handling
+- **API upload failures are mandatory**: If enabled, API upload failures will cause the test run to fail
+- **Graceful degradation**: File export continues even if API upload fails
+- **Retry logic**: API uploads are retried up to 3 times with exponential backoff
+- **Timeout protection**: API requests timeout after 30 seconds
+
+## Troubleshooting
+
+### No API Upload Report Generated
+
+If you're not seeing the API upload report, check the following:
+
+1. **URL Tracker Initialization**: Ensure the URL tracker is properly initialized in your tests
+2. **Navigation Events**: The tracker only uploads data if navigation events are detected
+3. **API Upload Enabled**: Check that `enableApiUpload: true` is set in your options
+4. **Authentication**: Verify that `LT_USERNAME` and `LT_ACCESS_KEY` environment variables are set
+
+### Debug URL Tracking
+
+Run the debug example to test URL tracking:
+
+```bash
+cd packages/playwright
+node examples/debug-url-tracker.js
+```
+
+This will show detailed logging of:
+- URL tracker initialization
+- Navigation events
+- Tracking results generation
+- API upload attempts
+
+### Common Issues
+
+**Issue**: "No API upload attempts detected"
+**Solution**: 
+- Check if URL tracker is initialized: Look for "Initializing URL tracker" logs
+- Verify navigation occurs: Look for "Navigation detected" logs
+- Check API upload settings: Look for "API upload enabled: true" logs
+
+**Issue**: API upload fails with authentication errors
+**Solution**:
+- Set environment variables: `export LT_USERNAME=your-username LT_ACCESS_KEY=your-access-key`
+- Or pass credentials directly in options: `{ username: 'your-username', accessKey: 'your-access-key' }`
+
+**Issue**: No tracking results generated
+**Solution**:
+- Ensure you're navigating to different URLs in your tests
+- Check that the page is not staying on `about:blank`
+- Verify the URL tracker is enabled: `{ enabled: true }`
+
+### Debug Logging
+
+Enable debug logging to see detailed information:
+
+```bash
+export DEBUG_URL_TRACKER=true
+```
+
+This will show:
+- Detailed navigation tracking
+- API upload payload information
+- Error details and stack traces

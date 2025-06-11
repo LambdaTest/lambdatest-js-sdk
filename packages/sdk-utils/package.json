@@ -3,6 +3,9 @@
   "version": "1.0.7",
   "description": "LambdaTest driver utils",
   "main": "index.js",
+  "bin": {
+    "lt-report": "./src/report-cli.js"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/LambdaTest/lambdatest-js-sdk",
@@ -13,16 +16,22 @@
   },
   "homepage": "https://github.com/LambdaTest/lambdatest-js-sdk/packages/sdk-utils#readme",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "report": "node src/report-cli.js"
   },
   "keywords": [
-    "lambdatest"
+    "lambdatest",
+    "html-reporter",
+    "tracking",
+    "report",
+    "cli"
   ],
   "author": "LambdaTest <keys@lambdatest.com>",
   "license": "MIT",
   "dependencies": {
     "axios": "^1.6.2",
     "chalk": "4",
-    "winston": "^3.11.0"
+    "winston": "^3.11.0",
+    "open": "^8.4.2"
   }
 }
