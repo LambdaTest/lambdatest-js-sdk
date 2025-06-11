@@ -5,9 +5,9 @@ const { enhanceConfigWithUrlTracking } = require('./src/insights/hooks');
 const { logger, UrlTrackerLogger, ApiUploader } = require('@lambdatest/sdk-utils');
 
 // Import HTML reporters from sdk-utils
-const { HtmlReporter, EnhancedHtmlReporter, ReportCLI } = require('../sdk-utils');
+const { HtmlReporter, EnhancedHtmlReporter, ReportCLI } = require('@lambdatest/sdk-utils');
 
-const { enableVerboseMode: universalEnableVerbose, runDebugScript } = require('../sdk-utils');
+const { enableVerboseMode: universalEnableVerbose, runDebugScript } = require('@lambdatest/sdk-utils');
 
 /**
  * Helper function to enable verbose mode for WebDriverIO
