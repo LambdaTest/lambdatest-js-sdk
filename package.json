@@ -1,5 +1,0 @@
-{
-  "dependencies": {
-    "@lambdatest/sdk-utils": "file:packages/sdk-utils"
-  }
-}
