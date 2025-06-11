@@ -6,7 +6,7 @@ const {
 const logger = require("./src/lib/logger");
 const { HtmlReporter, EnhancedHtmlReporter } = require("./src/insights/html-reporter");
 const ApiUploader = require("./src/insights/api-uploader");
-const { UrlTrackerLogger } = require("./src/insights/insights-logger");
+const { loggerInsights } = require("./src/insights/insights-logger");
 
 // Helper function to enable verbose mode for all frameworks
 function enableVerboseMode() {
@@ -44,7 +44,7 @@ function runDebugScript(framework = "all") {
 
 module.exports = {
   logger,
-  UrlTrackerLogger,
+  loggerInsights,
   fetchDOMSerializer,
   postSnapshot,
   isSmartUIRunning,
