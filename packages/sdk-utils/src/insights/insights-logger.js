@@ -236,10 +236,10 @@ class ContextLogger {
 }
 
 // Create default logger instance
-const logger = new UrlTrackerLogger();
+const loggerInsights = new UrlTrackerLogger();
 
 module.exports = {
     UrlTrackerLogger,
     ContextLogger,
-    logger
+    loggerInsights
 }; 
