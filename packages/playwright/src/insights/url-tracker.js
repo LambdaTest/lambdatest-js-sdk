@@ -2,7 +2,9 @@ const { EventEmitter } = require('events');
 const fs = require('fs');
 const path = require('path');
 // Import logger first
-const { logger } = require('../../../sdk-utils/src/insights/insights-logger');
+const { UrlTrackerLogger } = require('@lambdatest/sdk-utils');
+
+const logger = UrlTrackerLogger;
 
 // Import ApiUploader dynamically to avoid circular dependency issues
 let ApiUploader = null;
@@ -12,14 +14,14 @@ try {
     logger.error('Failed to import ApiUploader:', e.message);
 }
 
-// Import HTML Reporter
-let HtmlReporter;
+// Import Enhanced HTML Reporter
+let EnhancedHtmlReporter;
 try {
-    const { HtmlReporter: Reporter } = require('../../../sdk-utils');
-    HtmlReporter = Reporter;
+    const { EnhancedHtmlReporter: Reporter } = require('../../../sdk-utils');
+    EnhancedHtmlReporter = Reporter;
 } catch (e) {
     // Fallback if sdk-utils is not available
-    console.warn('HTML Reporter not available. Install @lambdatest/sdk-utils for HTML reports.');
+    console.warn('Enhanced HTML Reporter not available. Install @lambdatest/sdk-utils for HTML reports.');
 }
 
 // Track if we've shown the HTML report prompt
@@ -28,7 +30,7 @@ let hasShownReportPrompt = false;
 // Store the HTML reporter instance globally
 let globalHtmlReporter = null;
 
-// Function to show the HTML report prompt once at the end of all tests
+// Function to show the HTML report prompt and auto-open like Playwright
 function showHtmlReportPrompt(htmlReporter, reportPath) {
     if (hasShownReportPrompt) return;
     
@@ -40,11 +42,17 @@ function showHtmlReportPrompt(htmlReporter, reportPath) {
     
     // Add a small delay to ensure this shows after all test output
     setTimeout(() => {
-        console.log('\n');
-        console.log('  URL Tracking Report is ready:');
-        console.log(`  ${reportPath}`);
-        console.log('\n  Press "o" to open the report in your browser');
-        console.log('  Press "Ctrl+C" to exit\n');
+        console.log('\n🎉 Enhanced URL Tracking Report Generated!');
+        console.log(`📄 Report: ${reportPath}`);
+        console.log('🔍 Features: Search, Filters, Metrics Dashboard, GitHub Primer UI');
+        console.log('\n📝 Keyboard shortcuts:');
+        console.log('  • Press "o" to open the report in your browser');
+        console.log('  • Press "Ctrl+C" to exit\n');
+        
+        // Auto-open the report (like Playwright does)
+        if (htmlReporter && typeof htmlReporter.openReport === 'function') {
+            htmlReporter.openReport();
+        }
         
         // Setup keyboard listener
         if (htmlReporter) {
@@ -893,12 +901,12 @@ class UrlTrackerPlugin extends EventEmitter {
         // Before cleanup, export the results to file (existing functionality)
         this.exportResults();
         
-        // Generate HTML report if HtmlReporter is available and we have tracking results
-        if (HtmlReporter && this.trackingResults && this.trackingResults.length > 0) {
+        // Generate Enhanced HTML report if available and we have tracking results
+        if (EnhancedHtmlReporter && this.trackingResults && this.trackingResults.length > 0) {
             try {
-                logger.info('Generating HTML report for Playwright URL tracking...');
+                logger.info('Generating Enhanced HTML report for Playwright URL tracking...');
                 
-                // Create session data format expected by HtmlReporter
+                // Create session data format expected by EnhancedHtmlReporter
                 const sessionData = {
                     metadata: this.testMetadata || {},
                     navigations: this.trackingResults,
@@ -906,32 +914,35 @@ class UrlTrackerPlugin extends EventEmitter {
                     spec_file: this.options.specFile
                 };
                 
-                // Create or get the global HTML reporter
+                // Create or get the global Enhanced HTML reporter
                 if (!globalHtmlReporter) {
-                    globalHtmlReporter = new HtmlReporter({
+                    globalHtmlReporter = new EnhancedHtmlReporter({
                         outputDir: 'test-results',
                         title: 'LambdaTest Playwright URL Tracking Report',
-                        theme: 'dark',
-                        enableKeyboardShortcut: true
+                        theme: 'dark', // Default to dark theme
+                        enableKeyboardShortcut: true,
+                        autoOpen: false, // We'll handle opening manually for better control
+                        enableSearch: true,
+                        enableFilters: true,
+                        showMetrics: true,
+                        showTimeline: true
                     });
                 }
                 
                 const htmlReportPath = globalHtmlReporter.generateReport([sessionData], 'playwright');
-                logger.success(`HTML report generated: ${htmlReportPath}`);
+                logger.success(`Enhanced HTML report generated: ${htmlReportPath}`);
                 
-                // Show the keyboard shortcut prompt only after all tests
+                // Always show the prompt and auto-open (like Playwright does)
                 // Check if this is the last test cleanup
                 const registry = global._urlTrackerRegistry;
-                if (registry && registry.trackers && registry.trackers.size === 1) {
-                    allTestsComplete = true;
-                }
+                const isLastTest = !registry || !registry.trackers || registry.trackers.size <= 1;
                 
-                if (allTestsComplete) {
+                if (isLastTest) {
                     showHtmlReportPrompt(globalHtmlReporter, htmlReportPath);
                 }
                 
             } catch (htmlError) {
-                logger.warn(`Failed to generate HTML report: ${htmlError.message}`);
+                logger.error(`Failed to generate HTML report: ${htmlError.message}`);
             }
         }
         

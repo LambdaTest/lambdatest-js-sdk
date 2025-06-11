@@ -3,7 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
-const HtmlReporter = require('./html-reporter');
+const { HtmlReporter, EnhancedHtmlReporter } = require('./html-reporter');
 
 class ReportCLI {
     constructor() {
@@ -16,9 +16,15 @@ class ReportCLI {
             help: false,
             open: false,
             watch: false,
-            theme: 'dark',
+            theme: 'dark', // Default to dark theme
             output: 'test-results',
-            title: 'LambdaTest Tracking Report'
+            title: 'LambdaTest Tracking Report',
+            enhanced: true, // Use enhanced version by default
+            legacy: false, // Force legacy mode
+            showTimeline: true,
+            showMetrics: true,
+            enableSearch: true,
+            enableFilters: true
         };
 
         for (let i = 0; i < this.args.length; i++) {
@@ -38,13 +44,33 @@ class ReportCLI {
                     options.watch = true;
                     break;
                 case '--theme':
-                    options.theme = this.args[++i] || 'dark';
+                    options.theme = this.args[++i] || 'light';
                     break;
                 case '--output':
                     options.output = this.args[++i] || 'test-results';
                     break;
                 case '--title':
                     options.title = this.args[++i] || 'LambdaTest Tracking Report';
+                    break;
+                case '--enhanced':
+                    options.enhanced = true;
+                    options.legacy = false;
+                    break;
+                case '--legacy':
+                    options.enhanced = false;
+                    options.legacy = true;
+                    break;
+                case '--no-timeline':
+                    options.showTimeline = false;
+                    break;
+                case '--no-metrics':
+                    options.showMetrics = false;
+                    break;
+                case '--no-search':
+                    options.enableSearch = false;
+                    break;
+                case '--no-filters':
+                    options.enableFilters = false;
                     break;
                 default:
                     if (!arg.startsWith('-')) {
@@ -59,7 +85,7 @@ class ReportCLI {
 
     showHelp() {
         console.log(`
-📊 LambdaTest HTML Reporter CLI
+📊 LambdaTest Enhanced HTML Reporter CLI
 
 USAGE:
     npx @lambdatest/sdk-utils report [OPTIONS] [INPUT_FILE]
@@ -68,29 +94,54 @@ OPTIONS:
     -h, --help              Show this help message
     -o, --open              Open report in browser after generation  
     -w, --watch             Watch for changes and auto-regenerate
-    --theme <theme>         Report theme: 'dark' or 'light' (default: dark)
+    --theme <theme>         Report theme: 'light' or 'dark' (default: dark)
     --output <dir>          Output directory (default: test-results)
     --title <title>         Report title (default: LambdaTest Tracking Report)
+    
+REPORT STYLE:
+    --enhanced              Use enhanced Playwright-style UI (default)
+    --legacy                Use legacy simple UI
+    
+ENHANCED FEATURES:
+    --no-timeline           Disable timeline view
+    --no-metrics            Disable metrics dashboard
+    --no-search             Disable search functionality
+    --no-filters            Disable filter controls
 
 EXAMPLES:
-    # Generate report from auto-detected tracking files
+    # Generate enhanced report from auto-detected tracking files
     npx @lambdatest/sdk-utils report
     
-    # Generate and open report
+    # Generate and open enhanced report
     npx @lambdatest/sdk-utils report --open
     
-    # Generate from specific file with custom theme
-    npx @lambdatest/sdk-utils report --theme light path/to/tracking.json
+    # Generate from specific file with dark theme
+    npx @lambdatest/sdk-utils report --theme dark path/to/tracking.json
+    
+    # Use legacy simple UI
+    npx @lambdatest/sdk-utils report --legacy
     
     # Watch mode - regenerate on file changes
     npx @lambdatest/sdk-utils report --watch --open
 
-KEYBOARD SHORTCUTS (when report is running):
-    Ctrl+Shift+O: Open report in browser
-    Ctrl+Shift+R: Refresh report
+KEYBOARD SHORTCUTS (in enhanced report):
+    Ctrl/Cmd + K: Focus search
+    Escape: Clear search
+    O: Open report in browser (when watching)
     Ctrl+C: Exit
 
-🌐 The report will be saved as 'tracking-report.html' in the output directory.
+SUPPORTED FRAMEWORKS:
+    ✅ Appium (Mobile Navigation Tracking)
+    ✅ Playwright (URL Tracking)  
+    ✅ WebDriverIO (URL Tracking)
+
+🌐 The enhanced report features:
+   • GitHub Primer UI design system
+   • Real-time search and filtering
+   • Interactive navigation timeline
+   • Comprehensive metrics dashboard
+   • Responsive mobile-friendly design
+   • Dark/light theme toggle
         `);
     }
 
@@ -100,7 +151,7 @@ KEYBOARD SHORTCUTS (when report is running):
             return;
         }
 
-        console.log('🚀 Starting LambdaTest HTML Reporter...\n');
+        console.log('🚀 Starting LambdaTest Enhanced HTML Reporter...\n');
 
         try {
             await this.generateReport();
@@ -117,12 +168,19 @@ KEYBOARD SHORTCUTS (when report is running):
     }
 
     async generateReport() {
-        const reporter = new HtmlReporter({
+        // Create reporter with enhanced options
+        const reporterClass = this.options.enhanced ? EnhancedHtmlReporter : HtmlReporter;
+        const reporter = new reporterClass({
             outputDir: this.options.output,
             title: this.options.title,
             theme: this.options.theme,
             autoOpen: this.options.open,
-            enableKeyboardShortcut: true
+            enableKeyboardShortcut: true,
+            enhanced: this.options.enhanced,
+            showTimeline: this.options.showTimeline,
+            showMetrics: this.options.showMetrics,
+            enableSearch: this.options.enableSearch,
+            enableFilters: this.options.enableFilters
         });
 
         let reportPath;
@@ -150,18 +208,44 @@ KEYBOARD SHORTCUTS (when report is running):
         } else {
             // Auto-detect and generate from all tracking files
             console.log('🔍 Auto-detecting tracking files...');
-            reportPath = HtmlReporter.generateFromFiles({
-                outputDir: this.options.output,
-                title: this.options.title,
-                theme: this.options.theme,
-                autoOpen: this.options.open,
-                enableKeyboardShortcut: true
-            });
+            
+            if (this.options.enhanced) {
+                reportPath = EnhancedHtmlReporter.generateFromFiles({
+                    outputDir: this.options.output,
+                    title: this.options.title,
+                    theme: this.options.theme,
+                    autoOpen: this.options.open,
+                    enableKeyboardShortcut: true,
+                    enhanced: true,
+                    showTimeline: this.options.showTimeline,
+                    showMetrics: this.options.showMetrics,
+                    enableSearch: this.options.enableSearch,
+                    enableFilters: this.options.enableFilters
+                });
+            } else {
+                reportPath = HtmlReporter.generateFromFiles({
+                    outputDir: this.options.output,
+                    title: this.options.title,
+                    theme: this.options.theme,
+                    autoOpen: this.options.open,
+                    enableKeyboardShortcut: true,
+                    enhanced: false
+                });
+            }
         }
 
         if (reportPath) {
-            console.log(`\n✅ Report generated successfully!`);
+            console.log(`\n✅ ${this.options.enhanced ? 'Enhanced' : 'Legacy'} report generated successfully!`);
             console.log(`📄 Report location: ${path.resolve(reportPath)}`);
+            
+            if (this.options.enhanced) {
+                console.log('\n🎯 Enhanced features available:');
+                console.log('   • GitHub Primer UI design');
+                console.log('   • Real-time search and filtering');
+                console.log('   • Interactive metrics dashboard');
+                console.log('   • Responsive mobile design');
+                console.log('   • Dark/light theme toggle');
+            }
             
             if (this.options.open) {
                 console.log('🌐 Opening in browser...');
@@ -200,8 +284,8 @@ KEYBOARD SHORTCUTS (when report is running):
             console.log(`📌 Watching: ${filePath}`);
         });
 
-        // Keep the process running
-        this.setupKeyboardShortcuts();
+        // Keep process alive
+        process.stdin.resume();
     }
 
     getTrackingFiles() {
@@ -220,61 +304,53 @@ KEYBOARD SHORTCUTS (when report is running):
     }
 
     setupKeyboardShortcuts() {
-        console.log('\n🎹 Keyboard shortcuts:');
-        console.log('   • Ctrl+Shift+O: Open report in browser');
-        console.log('   • Ctrl+Shift+R: Regenerate report');  
-        console.log('   • Ctrl+C: Exit');
-        console.log('\nPress any key combination above...');
-
-        // Setup keyboard listener
-        if (process.stdin.setRawMode) {
-            process.stdin.setRawMode(true);
-            process.stdin.resume();
-            process.stdin.setEncoding('utf8');
-            
-            process.stdin.on('data', async (key) => {
-                // Ctrl+C to exit
-                if (key === '\x03') {
-                    console.log('\n👋 Goodbye!');
-                    process.exit(0);
-                }
-                
-                // Ctrl+Shift+O to open report (approximation)
-                if (key === '\x0F') {
-                    const reportPath = path.join(this.options.output, 'tracking-report.html');
-                    if (fs.existsSync(reportPath)) {
-                        console.log('\n🌐 Opening report in browser...');
-                        this.openInBrowser(reportPath);
-                    } else {
-                        console.log('\n⚠️  Report not found. Generate it first.');
-                    }
-                }
-                
-                // Ctrl+Shift+R to regenerate (approximation)
-                if (key === '\x12') {
-                    console.log('\n🔄 Regenerating report...');
-                    try {
-                        await this.generateReport();
-                    } catch (error) {
-                        console.error(`❌ Error: ${error.message}`);
-                    }
-                }
-            });
-        }
-
-        // Keep process alive
+        if (!process.stdin.isTTY) return;
+        
+        console.log('\n⌨️  Keyboard shortcuts enabled:');
+        console.log('   Press "o" to open report in browser');
+        console.log('   Press "Ctrl+C" to exit\n');
+        
+        process.stdin.setRawMode(true);
         process.stdin.resume();
+        process.stdin.setEncoding('utf8');
+        
+        process.stdin.on('data', (key) => {
+            // ctrl-c ( end of text )
+            if (key === '\u0003') {
+                console.log('\nExiting...');
+                process.exit();
+            }
+            
+            // 'o' key to open report
+            if (key.toLowerCase() === 'o') {
+                this.openInBrowser();
+            }
+        });
+        
+        // Cleanup on exit
+        process.on('exit', () => {
+            if (process.stdin.setRawMode) {
+                process.stdin.setRawMode(false);
+            }
+            process.stdin.pause();
+        });
     }
 
-    openInBrowser(reportPath) {
-        const { spawn } = require('child_process');
-        const command = process.platform === 'win32' ? 'start' :
-                       process.platform === 'darwin' ? 'open' : 'xdg-open';
-                       
-        spawn(command, [path.resolve(reportPath)], { 
-            detached: true, 
-            stdio: 'ignore' 
-        }).unref();
+    async openInBrowser() {
+        const reportPath = path.join(this.options.output, 'url-tracking-report.html');
+        
+        if (!fs.existsSync(reportPath)) {
+            console.error('❌ Report file not found');
+            return;
+        }
+        
+        try {
+            const open = require('open');
+            await open(reportPath);
+            console.log('🌐 Opened report in browser');
+        } catch (error) {
+            console.error(`❌ Failed to open browser: ${error.message}`);
+        }
     }
 }
 
@@ -282,7 +358,7 @@ KEYBOARD SHORTCUTS (when report is running):
 if (require.main === module) {
     const cli = new ReportCLI();
     cli.run().catch(error => {
-        console.error(`❌ Fatal error: ${error.message}`);
+        console.error('💥 CLI Error:', error);
         process.exit(1);
     });
 }

@@ -1,5 +1,5 @@
 import { NavigationTracker } from './NavigationTracker';
-const { logger } = require('../../../sdk-utils/src/insights/insights-logger');
+const { logger } = require('@lambdatest/sdk-utils');
 
 // Define the interface locally since it's not exported from NavigationTracker
 interface NavigationTrackerOptions {

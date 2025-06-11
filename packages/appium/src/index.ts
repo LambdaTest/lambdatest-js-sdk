@@ -1,8 +1,8 @@
 export { NavigationTracker } from './insights/NavigationTracker';
 // Re-export logger, UrlTrackerLogger and ApiUploader from common sdk-utils
-const { logger, UrlTrackerLogger } = require('../../sdk-utils/src/insights/insights-logger');
-const { enableVerboseMode: universalEnableVerbose, runDebugScript } = require('../../sdk-utils');
-const { ApiUploader } = require('../../sdk-utils/src/insights/api-uploader');
+const { logger, UrlTrackerLogger, ApiUploader } = require('@lambdatest/sdk-utils');
+const { enableVerboseMode: universalEnableVerbose, runDebugScript } = require('@lambdatest/sdk-utils');
+
 
 /**
  * Helper function to enable verbose mode for Appium
@@ -23,9 +23,14 @@ export function runAppiumDebugScript() {
 export { logger, UrlTrackerLogger };
 export { ApiUploader };
 export { WebDriverIONavigationTracker, createWebDriverIOTracker, NavigationTrackerOptions } from './insights/WebDriverIONavigationTracker';
-// Re-export HtmlReporter from common sdk-utils
-const { HtmlReporter } = require('../../sdk-utils/src/insights/html-reporter');
-export { HtmlReporter };
+
+// Re-export both HTML reporters from common sdk-utils
+const { HtmlReporter, EnhancedHtmlReporter } = require('../../sdk-utils/src/insights/html-reporter');
+export { HtmlReporter, EnhancedHtmlReporter };
+
+// Export CLI for generating reports
+const { ReportCLI } = require('../../sdk-utils');
+export { ReportCLI };
 
 export interface ApiUploaderOptions {
   apiEndpoint?: string;

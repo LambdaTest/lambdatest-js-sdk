@@ -2,7 +2,9 @@ const fs = require('fs');
 const path = require('path');
 const { spawn, exec } = require('child_process');
 const { logger } = require('../lib/logger');
-const open = require('open');
+
+// Import the enhanced HTML reporter
+const { EnhancedHtmlReporter } = require('./html-reporter-enhanced');
 
 /**
  * @typedef {Object} HtmlReporterOptions
@@ -74,32 +76,55 @@ const open = require('open');
  * @property {string} error
  */
 
+/**
+ * Main HTML Reporter class that provides both legacy and enhanced reporting
+ * This class serves as the main entry point and can switch between report styles
+ */
 class HtmlReporter {
-    /**
-     * @param {HtmlReporterOptions} options
-     */
     constructor(options = {}) {
         this.options = {
             outputDir: options.outputDir || 'test-results',
             reportName: options.reportName || 'url-tracking-report.html',
-            title: options.title || 'URL Tracking Report',
+            title: options.title || 'LambdaTest URL Tracking Report',
             enableKeyboardShortcut: options.enableKeyboardShortcut !== false,
             autoOpen: options.autoOpen || false,
-            theme: options.theme || 'dark'
+            theme: options.theme || 'dark', // Default to dark theme
+            enhanced: options.enhanced !== false, // Use enhanced version by default
+            showTimeline: options.showTimeline !== false,
+            showMetrics: options.showMetrics !== false,
+            enableSearch: options.enableSearch !== false,
+            enableFilters: options.enableFilters !== false
         };
         
-        this.reportPath = null;
-        this.isListening = false;
-        this.keyPressHandler = null;
+        // Use enhanced reporter if requested (default)
+        if (this.options.enhanced) {
+            this.reporter = new EnhancedHtmlReporter(this.options);
+        } else {
+            // Keep legacy implementation for backward compatibility
+            this.reporter = this;
+            this.reportPath = null;
+            this.isListening = false;
+            this.keyPressHandler = null;
+        }
     }
 
     /**
      * Generate HTML report from tracking results
-     * @param {any} trackingData
-     * @param {string} framework
-     * @returns {string}
+     * This is the main public API method
      */
     generateReport(trackingData, framework = 'unknown') {
+        if (this.options.enhanced && this.reporter !== this) {
+            return this.reporter.generateReport(trackingData, framework);
+        }
+        
+        // Legacy implementation for backward compatibility
+        return this.generateLegacyReport(trackingData, framework);
+    }
+
+    /**
+     * Legacy report generation (existing implementation)
+     */
+    generateLegacyReport(trackingData, framework = 'unknown') {
         try {
             console.log(`🎯 Generating ${framework} tracking report...`);
             
@@ -144,9 +169,6 @@ class HtmlReporter {
 
     /**
      * Parse and normalize tracking data from different frameworks
-     * @param {any} data
-     * @param {string} framework
-     * @returns {ReportData}
      */
     parseTrackingData(data, framework) {
         let normalized = {
@@ -196,59 +218,38 @@ class HtmlReporter {
 
     /**
      * Normalize session data format
-     * @param {any} session
-     * @param {string} framework
-     * @returns {SessionData}
      */
     normalizeSession(session, framework) {
-        const navigations = session.navigations || [];
-        
         return {
             session_id: session.session_id || session.metadata?.session_id || `session_${Date.now()}`,
-            spec_file: session.spec_file || session.metadata?.spec_file || 'unknown',
-            test_name: session.test_name || session.metadata?.name || 'unknown',
-            timestamp: session.timestamp || session.save_timestamp || new Date().toISOString(),
-            navigation_count: navigations.length,
-            navigations: navigations.map((nav) => this.normalizeNavigation(nav, framework)),
-            framework
+            spec_file: session.spec_file || session.metadata?.spec_file || 'unknown.spec.js',
+            test_name: session.test_name || session.metadata?.name || 'Unknown Test',
+            timestamp: session.timestamp || new Date().toISOString(),
+            framework: framework,
+            navigations: session.navigations ? session.navigations.map(nav => this.normalizeNavigation(nav, framework)) : [],
+            metadata: session.metadata || {}
         };
     }
 
     /**
-     * Normalize navigation data format
-     * @param {any} navigation
-     * @param {string} framework
-     * @returns {NavigationItem}
+     * Normalize navigation data
      */
     normalizeNavigation(navigation, framework) {
-        // Handle different navigation formats
-        if (framework === 'appium') {
-            return {
-                from: navigation.previous_screen || '',
-                to: navigation.current_screen || '',
-                timestamp: navigation.timestamp,
-                type: navigation.navigation_type || 'navigation',
-                test_name: navigation.test_name,
-                spec_file: navigation.spec_file
-            };
-        } else {
-            // Playwright/WebDriverIO URL tracking format
-            return {
-                from: navigation.previous_url || '',
-                to: navigation.current_url || '',
-                timestamp: navigation.timestamp,
-                type: navigation.navigation_type || 'navigation',
-                test_name: navigation.test_name,
-                spec_file: navigation.spec_file
-            };
-        }
+        // Handle different navigation formats from different frameworks
+        const normalized = {
+            previous_url: navigation.previous_url || navigation.from || navigation.previous_screen || 'null',
+            current_url: navigation.current_url || navigation.to || navigation.current_screen || 'null',
+            timestamp: navigation.timestamp || new Date().toISOString(),
+            navigation_type: navigation.navigation_type || navigation.type || 'navigation',
+            test_name: navigation.test_name || 'Unknown Test',
+            spec_file: navigation.spec_file || 'unknown.spec.js'
+        };
+
+        return normalized;
     }
 
     /**
-     * Generate HTML content for the report
-     * @param {ReportData} reportData
-     * @param {string} framework
-     * @returns {string}
+     * Generate legacy HTML content
      */
     generateHtmlContent(reportData, framework) {
         const isDark = this.options.theme === 'dark';
@@ -288,9 +289,7 @@ class HtmlReporter {
     }
 
     /**
-     * Generate CSS styles with GitHub Primer UI design system
-     * @param {boolean} isDark
-     * @returns {string}
+     * Generate CSS styles
      */
     getStyles(isDark) {
         const colors = isDark ? {
@@ -440,8 +439,6 @@ class HtmlReporter {
 
     /**
      * Generate sessions HTML
-     * @param {SessionData[]} sessions
-     * @returns {string}
      */
     generateSessions(sessions) {
         if (!Array.isArray(sessions) || sessions.length === 0) {
@@ -462,8 +459,6 @@ class HtmlReporter {
 
     /**
      * Generate navigations HTML
-     * @param {NavigationItem[]} navigations
-     * @returns {string}
      */
     generateNavigations(navigations) {
         if (!Array.isArray(navigations) || navigations.length === 0) {
@@ -476,11 +471,11 @@ class HtmlReporter {
             <div class="navigation-list">
                 ${navigations.map(nav => `
                     <div class="navigation-item">
-                        <div class="nav-type">${nav.type === 'user_interaction' ? 'User Interaction' : nav.type === 'test_start' ? 'Test Start' : nav.type === 'back_navigation' ? 'Back Navigation' : 'Unknown'}</div>
+                        <div class="nav-type">${this.formatNavigationType(nav.navigation_type)}</div>
                         <div class="nav-urls">
-                            <div class="url from">${nav.from || 'null'}</div>
+                            <div class="url from">${nav.previous_url || 'null'}</div>
                             <div class="arrow">→</div>
-                            <div class="url to">${nav.to || 'null'}</div>
+                            <div class="url to">${nav.current_url || 'null'}</div>
                         </div>
                         <div class="nav-time">${new Date(nav.timestamp).toLocaleString()}</div>
                     </div>
@@ -490,14 +485,33 @@ class HtmlReporter {
     }
 
     /**
+     * Format navigation type for display
+     */
+    formatNavigationType(type) {
+        const typeMap = {
+            'user_interaction': 'User Interaction',
+            'test_start': 'Test Start',
+            'back_navigation': 'Back Navigation',
+            'navigation': 'Navigation',
+            'goto': 'Page Load',
+            'page_load': 'Page Load',
+            'hash_change': 'Hash Change',
+            'spa_route': 'SPA Route',
+            'link_click': 'Link Click',
+            'form_submit': 'Form Submit',
+            'manual_record': 'Manual'
+        };
+        
+        return typeMap[type] || type || 'Unknown';
+    }
+
+    /**
      * Generate JavaScript for interactivity
-     * @returns {string}
      */
     getJavaScript() {
         return `
-            // Add any interactive features here
             document.addEventListener('DOMContentLoaded', () => {
-                // Example: Add click handlers for navigation items
+                // Add click handlers for navigation items
                 document.querySelectorAll('.navigation-item').forEach(item => {
                     item.addEventListener('click', () => {
                         item.classList.toggle('expanded');
@@ -508,7 +522,7 @@ class HtmlReporter {
     }
 
     /**
-     * Setup keyboard shortcut listener for opening report
+     * Setup keyboard shortcut listener
      */
     setupKeyboardShortcut() {
         if (this.isListening) {
@@ -564,6 +578,7 @@ class HtmlReporter {
         }
         
         try {
+            const open = require('open');
             await open(this.reportPath);
             console.log(`Opened report: ${this.reportPath}`);
         } catch (error) {
@@ -573,11 +588,16 @@ class HtmlReporter {
 
     /**
      * Generate report from tracking results files
-     * @param {HtmlReporterOptions} options
-     * @returns {string|null}
      */
     static generateFromFiles(options = {}) {
         const reporter = new HtmlReporter(options);
+        
+        // Use enhanced reporter if available
+        if (options.enhanced !== false) {
+            return EnhancedHtmlReporter.generateFromFiles(options);
+        }
+        
+        // Legacy implementation
         const trackingFiles = reporter.findTrackingFiles();
         
         if (trackingFiles.length === 0) {
@@ -622,7 +642,6 @@ class HtmlReporter {
 
     /**
      * Find tracking files in common locations
-     * @returns {string[]}
      */
     findTrackingFiles() {
         const possibleFiles = [
@@ -640,4 +659,5 @@ class HtmlReporter {
     }
 }
 
-module.exports = { HtmlReporter }; 
+// Export both the main HtmlReporter and the EnhancedHtmlReporter
+module.exports = { HtmlReporter, EnhancedHtmlReporter }; 

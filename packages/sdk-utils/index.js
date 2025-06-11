@@ -4,7 +4,7 @@ const {
   postSnapshot,
 } = require("./src/smartui");
 const logger = require("./src/lib/logger");
-const { HtmlReporter } = require("./src/insights/html-reporter");
+const { HtmlReporter, EnhancedHtmlReporter } = require("./src/insights/html-reporter");
 const ApiUploader = require("./src/insights/api-uploader");
 const { UrlTrackerLogger } = require("./src/insights/insights-logger");
 
@@ -15,6 +15,8 @@ function enableVerboseMode() {
   process.env.VERBOSE = "true";
   process.env.DEBUG_URL_TRACKER = "true";
   logger.info("Universal verbose mode enabled for all LambdaTest frameworks");
+  logger.verboseMode = true;
+  logger.info('Enhanced HTML reporter with Playwright-style UI is now the default');
 }
 
 // Helper function to run debug script programmatically
@@ -48,6 +50,8 @@ module.exports = {
   isSmartUIRunning,
   HtmlReporter,
   ApiUploader,
+  EnhancedHtmlReporter,
+  ReportCLI: require('./src/insights/report-cli'),
   enableVerboseMode,
   runDebugScript,
 };
