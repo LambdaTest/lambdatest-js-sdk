@@ -153,19 +153,42 @@ class EnhancedHtmlReporter {
     }
 
     /**
-     * Normalize session data
+     * Normalize session data - Enhanced to handle nested metadata structure
      */
     normalizeSession(session, framework) {
+        // Extract data from nested metadata structure
+        const metadataData = session.metadata?.data || {};
+        
         const normalized = {
-            session_id: session.session_id || session.metadata?.session_id || `session_${Date.now()}`,
-            spec_file: session.spec_file || session.metadata?.spec_file || 'unknown.spec.js',
-            test_name: session.test_name || session.metadata?.name || 'Unknown Test',
-            timestamp: session.timestamp || new Date().toISOString(),
+            session_id: session.session_id || metadataData.session_id || metadataData.test_id || `session_${Date.now()}`,
+            spec_file: session.spec_file || metadataData.spec_file || 'unknown.spec.js',
+            test_name: session.test_name || metadataData.name || session.metadata?.name || 'Unknown Test',
+            timestamp: session.timestamp || metadataData.create_timestamp || new Date().toISOString(),
             framework: framework,
             navigations: [],
             metadata: session.metadata || {},
+            metadataData: metadataData, // Store the nested data for display
             duration: 0,
-            status: 'completed'
+            status: metadataData.status_ind || metadataData.test_execution_status || 'completed',
+            // Extract additional metadata for display
+            build_id: metadataData.build_id,
+            build_name: metadataData.build_name,
+            username: metadataData.username,
+            test_type: metadataData.test_type,
+            platform: metadataData.platform,
+            browser: metadataData.browser,
+            browser_version: metadataData.browser_version,
+            resolution: metadataData.resolution,
+            geoInfo: metadataData.geoInfo,
+            // URLs for various resources
+            console_logs_url: metadataData.console_logs_url,
+            network_logs_url: metadataData.network_logs_url,
+            command_logs_url: metadataData.command_logs_url,
+            video_url: metadataData.video_url,
+            screenshot_url: metadataData.screenshot_url,
+            public_url: metadataData.public_url,
+            start_timestamp: metadataData.start_timestamp,
+            remark: metadataData.remark
         };
 
         // Normalize navigations
@@ -357,6 +380,7 @@ return `<!DOCTYPE html>
         .session-title {
             font-weight: 600;
             color: var(--color-fg-default);
+            font-size: 16px;
         }
         
         .session-meta {
@@ -364,24 +388,167 @@ return `<!DOCTYPE html>
             gap: 16px;
             font-size: 14px;
             color: var(--color-fg-muted);
+            flex-wrap: wrap;
+            margin-top: 4px;
+        }
+        
+        .session-details {
+            padding: 16px 0;
+        }
+        
+        .metadata-section {
+            margin-bottom: 24px;
+            background: var(--color-canvas-subtle);
+            border: 1px solid var(--color-border-default);
+            border-radius: 6px;
+            padding: 16px;
+        }
+        
+        .section-title {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin: 0 0 12px 0;
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--color-fg-default);
+        }
+        
+        .metadata-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 12px;
+        }
+        
+        .metadata-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 12px;
+            background: var(--color-canvas-default);
+            border: 1px solid var(--color-border-default);
+            border-radius: 4px;
+        }
+        
+        .metadata-label {
+            font-weight: 500;
+            color: var(--color-fg-muted);
+            font-size: 13px;
+        }
+        
+        .metadata-value {
+            font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+            font-size: 13px;
+            color: var(--color-fg-default);
+            font-weight: 500;
+        }
+        
+        .session-id {
+            background: var(--color-accent-subtle);
+            color: var(--color-accent-emphasis);
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 12px;
+        }
+        
+        .platform-badge {
+            background: var(--color-success-subtle);
+            color: var(--color-success-emphasis);
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 12px;
+            text-transform: uppercase;
+        }
+        
+        .browser-badge {
+            background: var(--color-accent-subtle);
+            color: var(--color-accent-emphasis);
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 12px;
+        }
+        
+        .resource-links {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+        
+        .resource-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            background: var(--color-canvas-default);
+            border: 1px solid var(--color-border-default);
+            border-radius: 6px;
+            text-decoration: none;
+            color: var(--color-fg-default);
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.15s ease;
+        }
+        
+        .resource-link:hover {
+            background: var(--color-canvas-subtle);
+            border-color: var(--color-border-muted);
+            text-decoration: none;
+            color: var(--color-fg-default);
+        }
+        
+        .resource-link.primary {
+            background: var(--color-accent-emphasis);
+            color: var(--color-fg-on-emphasis);
+            border-color: var(--color-accent-emphasis);
+        }
+        
+        .resource-link.primary:hover {
+            background: var(--color-accent-muted);
+            border-color: var(--color-accent-muted);
+            color: var(--color-fg-on-emphasis);
+        }
+        
+        .navigation-timeline {
+            background: var(--color-canvas-default);
+            border-radius: 4px;
+            padding: 8px;
         }
         
         .navigation-item {
             display: flex;
-            align-items: center;
-            padding: 8px 0;
+            align-items: flex-start;
+            padding: 12px 0;
             border-bottom: 1px solid var(--color-border-muted);
+            gap: 12px;
+        }
+        
+        .navigation-item:last-child {
+            border-bottom: none;
+        }
+        
+        .nav-sequence {
+            background: var(--color-accent-emphasis);
+            color: var(--color-fg-on-emphasis);
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: 600;
+            flex-shrink: 0;
         }
         
         .nav-type-badge {
             display: inline-block;
-            padding: 2px 8px;
+            padding: 4px 12px;
             border-radius: 12px;
-            font-size: 12px;
-            font-weight: 500;
-            margin-right: 12px;
-            min-width: 80px;
-            text-align: center;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            flex-shrink: 0;
         }
         
         .nav-type-navigation { background: var(--color-success-subtle); color: var(--color-success-fg); }
@@ -393,9 +560,66 @@ return `<!DOCTYPE html>
         .nav-urls {
             flex: 1;
             display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        
+        .url-section {
+            display: flex;
             align-items: center;
+            gap: 8px;
+        }
+        
+        .url-label {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--color-fg-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            min-width: 40px;
+        }
+        
+        .url-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 8px;
+            background: var(--color-canvas-subtle);
+            border: 1px solid var(--color-border-default);
+            border-radius: 4px;
+            text-decoration: none;
+            color: var(--color-fg-default);
             font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
-            font-size: 13px;
+            font-size: 12px;
+            max-width: 400px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            transition: all 0.15s ease;
+        }
+        
+        .url-link:hover {
+            background: var(--color-accent-subtle);
+            border-color: var(--color-accent-emphasis);
+            color: var(--color-accent-emphasis);
+            text-decoration: none;
+        }
+        
+        .url-link.primary {
+            background: var(--color-accent-subtle);
+            border-color: var(--color-accent-emphasis);
+            color: var(--color-accent-emphasis);
+            font-weight: 500;
+        }
+        
+        .url-link.primary:hover {
+            background: var(--color-accent-emphasis);
+            color: var(--color-fg-on-emphasis);
+        }
+        
+        .external-link {
+            opacity: 0.6;
+            flex-shrink: 0;
         }
         
         .url-box {
@@ -482,7 +706,7 @@ return `<!DOCTYPE html>
         }
         
         .collapsible-content.expanded {
-            max-height: 1000px;
+            max-height: 2000px;
         }
         
         .error-item {
@@ -507,10 +731,41 @@ return `<!DOCTYPE html>
                 grid-template-columns: 1fr;
             }
             
+            .metadata-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .resource-links {
+                flex-direction: column;
+            }
+            
+            .session-meta {
+                flex-direction: column;
+                gap: 8px;
+            }
+            
+            .navigation-item {
+                flex-direction: column;
+                gap: 8px;
+            }
+            
+            .nav-sequence {
+                align-self: flex-start;
+            }
+            
             .nav-urls {
+                width: 100%;
+            }
+            
+            .url-section {
                 flex-direction: column;
                 align-items: flex-start;
                 gap: 4px;
+            }
+            
+            .url-link {
+                width: 100%;
+                max-width: none;
             }
             
             .url-arrow {
@@ -630,10 +885,13 @@ return `<!DOCTYPE html>
                             <span>🔗 ${session.navigations.length} navigations</span>
                             <span>⏱️ ${new Date(session.timestamp).toLocaleString()}</span>
                             ${session.duration ? `<span>🕐 ${Math.round(session.duration/1000)}s</span>` : ''}
+                            ${session.username ? `<span>👤 ${session.username}</span>` : ''}
+                            ${session.build_name ? `<span>🏗️ ${session.build_name}</span>` : ''}
                         </div>
                     </div>
                     <div>
                         <span class="Label Label--secondary">${framework}</span>
+                        ${this.generateStatusBadge(session.status)}
                         <button class="btn btn-sm btn-invisible" type="button">
                             <svg class="octicon session-chevron" width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
                                 <path d="M6 8.825c-.2 0-.4-.1-.5-.2L1.275 4.4c-.3-.3-.3-.8 0-1.1s.8-.3 1.1 0L6 6.925 9.625 3.3c.3-.3.8-.3 1.1 0s.3.8 0 1.1L6.5 8.625c-.1.1-.3.2-.5.2z"/>
@@ -642,10 +900,205 @@ return `<!DOCTYPE html>
                     </div>
                 </div>
                 <div class="collapsible-content" id="session-${session.session_id}">
-                    ${this.generateNavigationsList(session.navigations)}
+                    ${this.generateSessionDetails(session)}
                 </div>
             </div>
         `).join('');
+    }
+
+    /**
+     * Generate detailed session information including metadata
+     */
+    generateSessionDetails(session) {
+        return `
+        <div class="session-details">
+            ${this.generateTestMetadata(session)}
+            ${this.generateEnvironmentInfo(session)}
+            ${this.generateResourceLinks(session)}
+            ${this.generateNavigationsList(session.navigations)}
+        </div>
+        `;
+    }
+
+    /**
+     * Generate test metadata section
+     */
+    generateTestMetadata(session) {
+        const metadata = session.metadataData || {};
+        
+        return `
+        <div class="metadata-section">
+            <h4 class="section-title">
+                <svg class="octicon" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M2 2.5A2.5 2.5 0 014.5 0h8.75a.75.75 0 01.75.75v12.5a.75.75 0 01-.75.75h-2.5a.75.75 0 110-1.5h1.75v-2h-8a1 1 0 00-.714 1.7.75.75 0 01-1.072 1.05A2.495 2.495 0 012 10.5v-8zm10.5-1V9h-8c-.356 0-.694.074-1 .208V2.5a1 1 0 011-1h8zM5 12.25v3.25a.25.25 0 00.4.2l1.45-1.087a.25.25 0 01.3 0L8.6 15.7a.25.25 0 00.4-.2v-3.25a.25.25 0 00-.25-.25h-3.5a.25.25 0 00-.25.25z"/>
+                </svg>
+                Test Information
+            </h4>
+            <div class="metadata-grid">
+                ${session.session_id ? `
+                <div class="metadata-item">
+                    <span class="metadata-label">Session ID</span>
+                    <span class="metadata-value session-id">${session.session_id}</span>
+                </div>
+                ` : ''}
+                ${session.build_id ? `
+                <div class="metadata-item">
+                    <span class="metadata-label">Build ID</span>
+                    <span class="metadata-value">${session.build_id}</span>
+                </div>
+                ` : ''}
+                ${session.test_type ? `
+                <div class="metadata-item">
+                    <span class="metadata-label">Test Type</span>
+                    <span class="metadata-value">${session.test_type.toUpperCase()}</span>
+                </div>
+                ` : ''}
+                ${session.start_timestamp ? `
+                <div class="metadata-item">
+                    <span class="metadata-label">Started At</span>
+                    <span class="metadata-value">${new Date(session.start_timestamp).toLocaleString()}</span>
+                </div>
+                ` : ''}
+                ${session.remark ? `
+                <div class="metadata-item">
+                    <span class="metadata-label">Status</span>
+                    <span class="metadata-value">${session.remark}</span>
+                </div>
+                ` : ''}
+            </div>
+        </div>
+        `;
+    }
+
+    /**
+     * Generate environment information section
+     */
+    generateEnvironmentInfo(session) {
+        const hasEnvInfo = session.platform || session.browser || session.resolution || session.geoInfo;
+        if (!hasEnvInfo) return '';
+
+        return `
+        <div class="metadata-section">
+            <h4 class="section-title">
+                <svg class="octicon" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M6.906.664a1.749 1.749 0 012.187 0l5.25 4.2c.415.332.657.835.657 1.367v7.019A1.75 1.75 0 0113.25 15h-2.5a.75.75 0 010-1.5h2.5a.25.25 0 00.25-.25V6.23a.25.25 0 00-.094-.196L8.157 1.867a.25.25 0 00-.314 0L2.594 6.034a.25.25 0 00-.094.196v8.02a.25.25 0 00.25.25h4.5a.75.75 0 010 1.5h-4.5A1.75 1.75 0 011 13.25V6.231c0-.532.242-1.035.657-1.367l5.25-4.2z"/>
+                    <path d="M8.25 10.25a.75.75 0 00-1.5 0v2.5h2V12a2 2 0 012-2h2a2 2 0 012 2v.75h.25a.75.75 0 000 1.5H8.75v-1.5h.5a.5.5 0 01.5.5v.25h2.5V12a.5.5 0 00-.5-.5h-2a.5.5 0 00-.5.5v.75z"/>
+                </svg>
+                Environment
+            </h4>
+            <div class="metadata-grid">
+                ${session.platform ? `
+                <div class="metadata-item">
+                    <span class="metadata-label">Platform</span>
+                    <span class="metadata-value platform-badge">${session.platform.toUpperCase()}</span>
+                </div>
+                ` : ''}
+                ${session.browser ? `
+                <div class="metadata-item">
+                    <span class="metadata-label">Browser</span>
+                    <span class="metadata-value browser-badge">${session.browser} ${session.browser_version || ''}</span>
+                </div>
+                ` : ''}
+                ${session.resolution ? `
+                <div class="metadata-item">
+                    <span class="metadata-label">Resolution</span>
+                    <span class="metadata-value">${session.resolution}</span>
+                </div>
+                ` : ''}
+                ${session.geoInfo ? `
+                <div class="metadata-item">
+                    <span class="metadata-label">Location</span>
+                    <span class="metadata-value">${session.geoInfo.regionName}, ${session.geoInfo.country} (${session.geoInfo.provider})</span>
+                </div>
+                ` : ''}
+            </div>
+        </div>
+        `;
+    }
+
+    /**
+     * Generate resource links section
+     */
+    generateResourceLinks(session) {
+        const hasLinks = session.video_url || session.screenshot_url || session.console_logs_url || 
+                         session.network_logs_url || session.command_logs_url || session.public_url;
+        if (!hasLinks) return '';
+
+        return `
+        <div class="metadata-section">
+            <h4 class="section-title">
+                <svg class="octicon" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="m7.775 3.275 1.25-1.25a3.5 3.5 0 1 1 4.95 4.95l-2.5 2.5a3.5 3.5 0 0 1-4.95 0 .751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018 1.998 1.998 0 0 0 2.83 0l2.5-2.5a2.002 2.002 0 0 0-2.83-2.83l-1.25 1.25a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042Zm-4.69 9.64a1.998 1.998 0 0 0 2.83 0l1.25-1.25a.751.751 0 0 1 1.042.018.751.751 0 0 1 .018 1.042l-1.25 1.25a3.5 3.5 0 1 1-4.95-4.95l2.5-2.5a3.5 3.5 0 0 1 4.95 0 .751.751 0 0 1-.018 1.042.751.751 0 0 1-1.042.018 1.998 1.998 0 0 0-2.83 0l-2.5 2.5a1.998 1.998 0 0 0 0 2.83Z"/>
+                </svg>
+                Resources & Logs
+            </h4>
+            <div class="resource-links">
+                ${session.public_url ? `
+                <a href="${session.public_url}" target="_blank" class="resource-link primary">
+                    <svg class="octicon" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M3.75 2h3.5a.75.75 0 0 1 0 1.5h-3.5a.25.25 0 0 0-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25v-3.5a.75.75 0 0 1 1.5 0v3.5A1.75 1.75 0 0 1 12.25 14h-8.5A1.75 1.75 0 0 1 2 12.25v-8.5C2 2.784 2.784 2 3.75 2Zm6.854-1h4.146a.25.25 0 0 1 .25.25v4.146a.25.25 0 0 1-.427.177L13.03 4.03 9.28 7.78a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042l3.75-3.75-1.543-1.543A.25.25 0 0 1 10.604 1Z"/>
+                    </svg>
+                    View Public Test Report
+                </a>
+                ` : ''}
+                ${session.video_url ? `
+                <a href="${session.video_url}" target="_blank" class="resource-link">
+                    <svg class="octicon" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="m11.596 8.697-6.363 3.692c-.54.313-1.233-.066-1.233-.697V4.308c0-.63.692-1.01 1.233-.696l6.363 3.692a.802.802 0 0 1 0 1.393z"/>
+                    </svg>
+                    Video Recording
+                </a>
+                ` : ''}
+                ${session.screenshot_url ? `
+                <a href="${session.screenshot_url}" target="_blank" class="resource-link">
+                    <svg class="octicon" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M8 2a5.53 5.53 0 0 0-3.594 1.342c-.766.66-1.321 1.52-1.464 2.383C1.266 6.095 0 7.555 0 9.318 0 11.366 1.708 13 3.781 13h8.906C14.502 13 16 11.57 16 9.773c0-1.636-1.242-2.969-2.834-3.194C12.923 3.999 10.69 2 8 2zm2.354 6.854-2 2a.5.5 0 0 1-.708 0l-2-2a.5.5 0 1 1 .708-.708L7.5 9.293V5.5a.5.5 0 0 1 1 0v3.793l1.146-1.147a.5.5 0 0 1 .708.708z"/>
+                    </svg>
+                    Screenshots
+                </a>
+                ` : ''}
+                ${session.console_logs_url ? `
+                <a href="${session.console_logs_url}" target="_blank" class="resource-link">
+                    <svg class="octicon" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M0 2.75C0 1.784.784 1 1.75 1h12.5c.966 0 1.75.784 1.75 1.75v10.5A1.75 1.75 0 0 1 14.25 15H1.75A1.75 1.75 0 0 1 0 13.25V2.75zm1.75-.25a.25.25 0 0 0-.25.25v10.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25V2.75a.25.25 0 0 0-.25-.25H1.75zM7.25 8a.75.75 0 0 1-.22.53l-2.25 2.25a.75.75 0 0 1-1.06-1.06L5.44 8 3.72 6.28a.75.75 0 0 1 1.06-1.06l2.25 2.25c.141.14.22.331.22.53zm1.5 1.5a.75.75 0 0 1 0-1.5h3a.75.75 0 0 1 0 1.5h-3z"/>
+                    </svg>
+                    Console Logs
+                </a>
+                ` : ''}
+                ${session.network_logs_url ? `
+                <a href="${session.network_logs_url}" target="_blank" class="resource-link">
+                    <svg class="octicon" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M2.5 3.5c0-.825.675-1.5 1.5-1.5h1c.825 0 1.5.675 1.5 1.5V5h1V3.5c0-.825.675-1.5 1.5-1.5h1c.825 0 1.5.675 1.5 1.5V12c0 1.38-1.12 2.5-2.5 2.5h-9C1.12 14.5 0 13.38 0 12V3.5c0-.825.675-1.5 1.5-1.5h1zM1.5 12c0 .55.45 1 1 1h9c.55 0 1-.45 1-1V6.5H1.5V12z"/>
+                    </svg>
+                    Network Logs
+                </a>
+                ` : ''}
+                ${session.command_logs_url ? `
+                <a href="${session.command_logs_url}" target="_blank" class="resource-link">
+                    <svg class="octicon" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M7.25 2.75a.75.75 0 0 0-1.5 0v8.5a.75.75 0 0 0 1.5 0v-3.5h3.25a.75.75 0 0 0 0-1.5H7.25v-3.5z"/>
+                    </svg>
+                    Command Logs
+                </a>
+                ` : ''}
+            </div>
+        </div>
+        `;
+    }
+
+    /**
+     * Generate status badge for session
+     */
+    generateStatusBadge(status) {
+        const statusMap = {
+            'completed': { class: 'success', icon: '✓' },
+            'running': { class: 'attention', icon: '⟳' },
+            'failed': { class: 'danger', icon: '✗' },
+            'timeout': { class: 'severe', icon: '⏱' }
+        };
+        
+        const statusInfo = statusMap[status] || { class: 'secondary', icon: '?' };
+        return `<span class="Label Label--${statusInfo.class}">${statusInfo.icon} ${status}</span>`;
     }
 
     /**
@@ -657,18 +1110,44 @@ return `<!DOCTYPE html>
         }
 
         return `
-        <div class="pt-3">
-            ${navigations.map((nav, index) => `
-                <div class="navigation-item">
-                    <span class="nav-type-badge nav-type-${nav.navigation_type.replace(/[^a-z]/gi, '')}">${nav.navigation_type}</span>
-                    <div class="nav-urls">
-                        <div class="url-box" title="${nav.previous_url}">${this.truncateUrl(nav.previous_url)}</div>
-                        <span class="url-arrow">→</span>
-                        <div class="url-box" title="${nav.current_url}">${this.truncateUrl(nav.current_url)}</div>
+        <div class="metadata-section">
+            <h4 class="section-title">
+                <svg class="octicon" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M7.775 3.275 1.25-1.25a3.5 3.5 0 1 1 4.95 4.95l-2.5 2.5a3.5 3.5 0 0 1-4.95 0 .751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018 1.998 1.998 0 0 0 2.83 0l2.5-2.5a2.002 2.002 0 0 0-2.83-2.83l-1.25 1.25a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042Zm-4.69 9.64a1.998 1.998 0 0 0 2.83 0l1.25-1.25a.751.751 0 0 1 1.042.018.751.751 0 0 1 .018 1.042l-1.25 1.25a3.5 3.5 0 1 1-4.95-4.95l2.5-2.5a3.5 3.5 0 0 1 4.95 0 .751.751 0 0 1-.018 1.042.751.751 0 0 1-1.042.018 1.998 1.998 0 0 0-2.83 0l-2.5 2.5a1.998 1.998 0 0 0 0 2.83Z"/>
+                </svg>
+                Navigation History (${navigations.length} entries)
+            </h4>
+            <div class="navigation-timeline">
+                ${navigations.map((nav, index) => `
+                    <div class="navigation-item">
+                        <div class="nav-sequence">${index + 1}</div>
+                        <span class="nav-type-badge nav-type-${nav.navigation_type.replace(/[^a-z]/gi, '')}">${nav.navigation_type}</span>
+                        <div class="nav-urls">
+                            ${nav.previous_url !== 'null' ? `
+                                <div class="url-section">
+                                    <span class="url-label">From:</span>
+                                    <a href="${nav.previous_url}" target="_blank" class="url-link" title="${nav.previous_url}">
+                                        ${this.truncateUrl(nav.previous_url)}
+                                        <svg class="octicon external-link" width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                                            <path d="M3.75 2h3.5a.75.75 0 0 1 0 1.5h-3.5a.25.25 0 0 0-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25v-3.5a.75.75 0 0 1 1.5 0v3.5A1.75 1.75 0 0 1 12.25 14h-8.5A1.75 1.75 0 0 1 2 12.25v-8.5C2 2.784 2.784 2 3.75 2Zm6.854-1h4.146a.25.25 0 0 1 .25.25v4.146a.25.25 0 0 1-.427.177L13.03 4.03 9.28 7.78a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042l3.75-3.75-1.543-1.543A.25.25 0 0 1 10.604 1Z"/>
+                                        </svg>
+                                    </a>
+                                </div>
+                            ` : ''}
+                            <div class="url-section">
+                                <span class="url-label">To:</span>
+                                <a href="${nav.current_url}" target="_blank" class="url-link primary" title="${nav.current_url}">
+                                    ${this.truncateUrl(nav.current_url)}
+                                    <svg class="octicon external-link" width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                                        <path d="M3.75 2h3.5a.75.75 0 0 1 0 1.5h-3.5a.25.25 0 0 0-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25v-3.5a.75.75 0 0 1 1.5 0v3.5A1.75 1.75 0 0 1 12.25 14h-8.5A1.75 1.75 0 0 1 2 12.25v-8.5C2 2.784 2.784 2 3.75 2Zm6.854-1h4.146a.25.25 0 0 1 .25.25v4.146a.25.25 0 0 1-.427.177L13.03 4.03 9.28 7.78a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042l3.75-3.75-1.543-1.543A.25.25 0 0 1 10.604 1Z"/>
+                                    </svg>
+                                </a>
+                            </div>
+                        </div>
+                        <div class="nav-timestamp">${this.formatTimestamp(nav.timestamp)}</div>
                     </div>
-                    <div class="nav-timestamp">${this.formatTimestamp(nav.timestamp)}</div>
-                </div>
-            `).join('')}
+                `).join('')}
+            </div>
         </div>
         `;
     }
