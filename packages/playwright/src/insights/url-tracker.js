@@ -2,11 +2,8 @@ const { EventEmitter } = require('events');
 const fs = require('fs');
 const path = require('path');
 // Import logger first
-const { UrlTrackerLogger } = require('@lambdatest/sdk-utils');
-
-const logger = UrlTrackerLogger;
-
-// Import ApiUploader dynamically to avoid circular dependency issues
+const { loggerInsights } = require('@lambdatest/sdk-utils');
+const logger = loggerInsights;
 let ApiUploader = null;
 try {
     ApiUploader = require('../../../sdk-utils/src/insights/api-uploader');
