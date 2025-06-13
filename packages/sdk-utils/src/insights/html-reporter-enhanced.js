@@ -206,6 +206,8 @@ class EnhancedHtmlReporter {
         return {
             previous_url: navigation.previous_url || navigation.from || navigation.previous_screen || 'null',
             current_url: navigation.current_url || navigation.to || navigation.current_screen || 'null',
+            previous_title: navigation.previous_title || navigation.from_title || navigation.previous_page_title || null,
+            current_title: navigation.current_title || navigation.to_title || navigation.title || navigation.page_title || null,
             timestamp: navigation.timestamp || new Date().toISOString(),
             navigation_type: navigation.navigation_type || navigation.type || 'navigation',
             test_name: navigation.test_name || 'Unknown Test',
@@ -241,8 +243,6 @@ return `<!DOCTYPE html>
                 LambdaTest / ${this.options.title}
                 </div>
             <div style="display: flex; align-items: center; gap: 16px;">
-                <span style="background-color: var(--color-accent-emphasis); color: var(--color-fg-on-emphasis); padding: 2px 8px; border-radius: 12px; font-size: 12px; font-weight: 600;">${reportData.summary.totalSessions}</span>
-                <span style="font-size: 12px; color: var(--color-fg-muted);">sessions</span>
                 <button id="theme-toggle" style="background: var(--color-btn-bg); border: 1px solid var(--color-btn-border); border-radius: 6px; padding: 6px 8px; color: var(--color-fg-default); cursor: pointer; display: flex; align-items: center;" title="Toggle theme">
                     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" class="theme-icon-light">
                         <path d="M8 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM8 0a.75.75 0 0 1 .75.75v1.5a.75.75 0 0 1-1.5 0V.75A.75.75 0 0 1 8 0Zm0 13a.75.75 0 0 1 .75.75v1.5a.75.75 0 0 1-1.5 0v-1.5A.75.75 0 0 1 8 13ZM2.343 2.343a.75.75 0 0 1 1.061 0l1.06 1.061a.75.75 0 0 1-1.06 1.06L2.343 3.404a.75.75 0 0 1 0-1.061Zm9.193 9.193a.75.75 0 0 1 1.061 0l1.06 1.061a.75.75 0 0 1-1.06 1.06l-1.061-1.06a.75.75 0 0 1 0-1.061ZM16 8a.75.75 0 0 1-.75.75h-1.5a.75.75 0 0 1 0-1.5h1.5A.75.75 0 0 1 16 8ZM3 8a.75.75 0 0 1-.75.75H.75a.75.75 0 0 1 0-1.5h1.5A.75.75 0 0 1 3 8Zm10.657-5.657a.75.75 0 0 1 0 1.061l-1.061 1.06a.75.75 0 1 1-1.06-1.06l1.06-1.061a.75.75 0 0 1 1.061 0Zm-9.193 9.193a.75.75 0 0 1 0 1.061l-1.061 1.06a.75.75 0 1 1-1.06-1.06l1.06-1.061a.75.75 0 0 1 1.061 0Z"/>
@@ -270,7 +270,7 @@ return `<!DOCTYPE html>
         <!-- Main Content -->
     <div style="max-width: 1280px; margin: 0 auto; padding: 24px 16px;">
         <!-- Summary Cards -->
-        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px;">
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; margin-bottom: 24px;">
             <div style="background: var(--color-canvas-subtle); border: 1px solid var(--color-border-default); border-radius: 6px; padding: 16px; text-align: center;">
                 <div style="font-size: 24px; font-weight: 600; color: var(--color-fg-default); margin-bottom: 4px;">${reportData.summary.totalSessions}</div>
                 <div style="font-size: 12px; color: var(--color-fg-muted); text-transform: uppercase; letter-spacing: 0.5px;">Test Sessions</div>
@@ -459,9 +459,57 @@ return `<!DOCTYPE html>
             }
         }
 
+        /* Title loading and display styles */
+        .nav-page-title {
+            transition: opacity 0.3s ease;
+        }
+        
+        .nav-page-title .title-text {
+            max-width: 300px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        
+        /* Loading animation for title text */
+        .nav-page-title .title-text[data-loading="true"] {
+            opacity: 0.6;
+            position: relative;
+        }
+        
+        .nav-page-title .title-text[data-loading="true"]::after {
+            content: '';
+            position: absolute;
+            right: -16px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 12px;
+            height: 12px;
+            border: 2px solid var(--color-fg-muted);
+            border-top: 2px solid var(--color-accent-emphasis);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            0% { transform: translateY(-50%) rotate(0deg); }
+            100% { transform: translateY(-50%) rotate(360deg); }
+        }
+        
+        /* Hover effects for URL links with titles */
+        .nav-url-link:hover + .nav-page-title,
+        .nav-page-title:hover {
+            opacity: 0.8;
+            transition: opacity 0.2s ease;
+        }
+
         /* Print styles */
         @media print {
             #theme-toggle {
+                display: none !important;
+            }
+            
+            .nav-page-title .title-text[data-loading="true"]::after {
                 display: none !important;
             }
         }
@@ -1191,6 +1239,7 @@ return `<!DOCTYPE html>
      * Generate navigation flow visualization
      */
     generateNavigationFlow(nav, index) {
+        const navId = `nav-${index}`;
         return `
         <div class="nav-flow">
                             ${nav.previous_url !== 'null' ? `
@@ -1202,7 +1251,13 @@ return `<!DOCTYPE html>
                     From
                 </div>
                 <div class="nav-url-card">
-                    <a href="${nav.previous_url}" target="_blank" class="nav-url-link" title="${nav.previous_url}">
+                    <div class="nav-page-title" id="${navId}-prev-title" style="font-weight: 600; color: var(--color-fg-default); margin-bottom: 4px; font-size: 14px; display: none;">
+                        <svg class="octicon octicon-browser mr-1" width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                            <path d="M0 2.75C0 1.784.784 1 1.75 1h12.5c.966 0 1.75.784 1.75 1.75v10.5A1.75 1.75 0 0 1 14.25 15H1.75A1.75 1.75 0 0 1 0 13.25V2.75zm1.75-.25a.25.25 0 0 0-.25.25v10.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25V2.75a.25.25 0 0 0-.25-.25H1.75zM7.25 4a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0ZM4.75 4a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0ZM10.25 4a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Z"/>
+                        </svg>
+                        <span class="title-text">Loading...</span>
+                    </div>
+                    <a href="${nav.previous_url}" target="_blank" class="nav-url-link" title="${nav.previous_url}" data-url="${nav.previous_url}" data-title-target="${navId}-prev-title">
                         <svg class="octicon octicon-link-external mr-1" width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
                                             <path d="M3.75 2h3.5a.75.75 0 0 1 0 1.5h-3.5a.25.25 0 0 0-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25v-3.5a.75.75 0 0 1 1.5 0v3.5A1.75 1.75 0 0 1 12.25 14h-8.5A1.75 1.75 0 0 1 2 12.25v-8.5C2 2.784 2.784 2 3.75 2Zm6.854-1h4.146a.25.25 0 0 1 .25.25v4.146a.25.25 0 0 1-.427.177L13.03 4.03 9.28 7.78a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042l3.75-3.75-1.543-1.543A.25.25 0 0 1 10.604 1Z"/>
                                         </svg>
@@ -1224,7 +1279,13 @@ return `<!DOCTYPE html>
                     To
                 </div>
                 <div class="nav-url-card primary">
-                    <a href="${nav.current_url}" target="_blank" class="nav-url-link" title="${nav.current_url}">
+                    <div class="nav-page-title" id="${navId}-curr-title" style="font-weight: 600; color: var(--color-fg-default); margin-bottom: 4px; font-size: 14px; display: none;">
+                        <svg class="octicon octicon-browser mr-1" width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                            <path d="M0 2.75C0 1.784.784 1 1.75 1h12.5c.966 0 1.75.784 1.75 1.75v10.5A1.75 1.75 0 0 1 14.25 15H1.75A1.75 1.75 0 0 1 0 13.25V2.75zm1.75-.25a.25.25 0 0 0-.25.25v10.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25V2.75a.25.25 0 0 0-.25-.25H1.75zM7.25 4a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0ZM4.75 4a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0ZM10.25 4a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Z"/>
+                        </svg>
+                        <span class="title-text">Loading...</span>
+                    </div>
+                    <a href="${nav.current_url}" target="_blank" class="nav-url-link" title="${nav.current_url}" data-url="${nav.current_url}" data-title-target="${navId}-curr-title">
                         <svg class="octicon octicon-link-external mr-1" width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
                                         <path d="M3.75 2h3.5a.75.75 0 0 1 0 1.5h-3.5a.25.25 0 0 0-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25v-3.5a.75.75 0 0 1 1.5 0v3.5A1.75 1.75 0 0 1 12.25 14h-8.5A1.75 1.75 0 0 1 2 12.25v-8.5C2 2.784 2.784 2 3.75 2Zm6.854-1h4.146a.25.25 0 0 1 .25.25v4.146a.25.25 0 0 1-.427.177L13.03 4.03 9.28 7.78a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042l3.75-3.75-1.543-1.543A.25.25 0 0 1 10.604 1Z"/>
                                     </svg>
@@ -1285,6 +1346,19 @@ return `<!DOCTYPE html>
             // If URL parsing fails, use simple truncation
             return url.substring(0, 47) + '...';
         }
+    }
+
+    /**
+     * Escape HTML characters in strings
+     */
+    escapeHtml(unsafe) {
+        if (!unsafe) return '';
+        return unsafe
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
     }
 
     /**
@@ -1847,7 +1921,13 @@ return `<!DOCTYPE html>
                             <div style="margin-bottom: 8px;">
                                 <div style="font-size: 10px; color: var(--color-fg-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; font-weight: 600;">FROM</div>
                                 <div style="background: var(--color-canvas-subtle); border: 1px solid var(--color-border-default); border-radius: 6px; padding: 12px;">
-                                    <a href="${nav.previous_url}" target="_blank" style="color: var(--color-fg-default); text-decoration: none; font-family: monospace; font-size: 12px; word-break: break-all;">
+                                    <div id="inline-nav-${index}-prev-title" style="font-weight: 600; color: var(--color-fg-default); margin-bottom: 8px; font-size: 14px; display: none; align-items: center;">
+                                        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style="margin-right: 4px;">
+                                            <path d="M0 2.75C0 1.784.784 1 1.75 1h12.5c.966 0 1.75.784 1.75 1.75v10.5A1.75 1.75 0 0 1 14.25 15H1.75A1.75 1.75 0 0 1 0 13.25V2.75zm1.75-.25a.25.25 0 0 0-.25.25v10.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25V2.75a.25.25 0 0 0-.25-.25H1.75zM7.25 4a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0ZM4.75 4a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0ZM10.25 4a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Z"/>
+                                        </svg>
+                                        <span class="title-text">Loading...</span>
+                                    </div>
+                                    <a href="${nav.previous_url}" target="_blank" style="color: var(--color-fg-default); text-decoration: none; font-family: monospace; font-size: 12px; word-break: break-all;" data-url="${nav.previous_url}" data-title-target="inline-nav-${index}-prev-title">
                                         ${this.formatUrl(nav.previous_url)}
                                     </a>
                                 </div>
@@ -1856,7 +1936,13 @@ return `<!DOCTYPE html>
                             <div>
                                 <div style="font-size: 10px; color: var(--color-fg-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; font-weight: 600;">TO</div>
                                 <div style="background: var(--color-accent-subtle); border: 1px solid var(--color-accent-emphasis); border-radius: 6px; padding: 12px;">
-                                    <a href="${nav.current_url}" target="_blank" style="color: var(--color-fg-default); text-decoration: none; font-family: monospace; font-size: 12px; word-break: break-all;">
+                                    <div id="inline-nav-${index}-curr-title" style="font-weight: 600; color: var(--color-fg-default); margin-bottom: 8px; font-size: 14px; display: none; align-items: center;">
+                                        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style="margin-right: 4px;">
+                                            <path d="M0 2.75C0 1.784.784 1 1.75 1h12.5c.966 0 1.75.784 1.75 1.75v10.5A1.75 1.75 0 0 1 14.25 15H1.75A1.75 1.75 0 0 1 0 13.25V2.75zm1.75-.25a.25.25 0 0 0-.25.25v10.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25V2.75a.25.25 0 0 0-.25-.25H1.75zM7.25 4a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0ZM4.75 4a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0ZM10.25 4a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Z"/>
+                                        </svg>
+                                        <span class="title-text">Loading...</span>
+                                    </div>
+                                    <a href="${nav.current_url}" target="_blank" style="color: var(--color-fg-default); text-decoration: none; font-family: monospace; font-size: 12px; word-break: break-all;" data-url="${nav.current_url}" data-title-target="inline-nav-${index}-curr-title">
                                         ${this.formatUrl(nav.current_url)}
                                     </a>
                                 </div>
@@ -1875,6 +1961,10 @@ return `<!DOCTYPE html>
     getSimpleJavaScript() {
         return `
     <script>
+        // Cache for fetched titles to avoid duplicate requests
+        const titleCache = new Map();
+        const failedUrls = new Set();
+
         // Initialize theme from localStorage or default to light
         document.addEventListener('DOMContentLoaded', function() {
             const savedTheme = localStorage.getItem('theme') || 'light';
@@ -1885,6 +1975,9 @@ return `<!DOCTYPE html>
             if (themeToggle) {
                 themeToggle.addEventListener('click', toggleTheme);
             }
+            
+            // Start fetching page titles
+            fetchAllPageTitles();
         });
 
         function toggleSession(sessionId) {
@@ -1894,6 +1987,8 @@ return `<!DOCTYPE html>
             if (content.style.display === 'none') {
                 content.style.display = 'block';
                 chevron.style.transform = 'rotate(180deg)';
+                // Fetch titles when session is opened
+                fetchTitlesForSession(content);
             } else {
                 content.style.display = 'none';
                 chevron.style.transform = 'rotate(0deg)';
@@ -1925,12 +2020,173 @@ return `<!DOCTYPE html>
             }
         }
 
+        // Fetch page titles for all URLs
+        async function fetchAllPageTitles() {
+            const urlLinks = document.querySelectorAll('a[data-url][data-title-target]');
+            const uniqueUrls = new Set();
+            
+            // Collect unique URLs
+            urlLinks.forEach(link => {
+                const url = link.getAttribute('data-url');
+                if (url && url !== 'null' && !failedUrls.has(url)) {
+                    uniqueUrls.add(url);
+                }
+            });
+            
+            console.log(\`🔍 Found \${uniqueUrls.size} unique URLs to fetch titles for\`);
+            
+            // Process URLs in batches to avoid overwhelming the browser
+            const urlArray = Array.from(uniqueUrls);
+            const batchSize = 5;
+            
+            for (let i = 0; i < urlArray.length; i += batchSize) {
+                const batch = urlArray.slice(i, i + batchSize);
+                await Promise.allSettled(batch.map(url => fetchPageTitle(url)));
+                
+                // Small delay between batches to be respectful
+                if (i + batchSize < urlArray.length) {
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+            }
+        }
+
+        // Fetch titles for URLs in a specific session
+        function fetchTitlesForSession(sessionElement) {
+            const urlLinks = sessionElement.querySelectorAll('a[data-url][data-title-target]');
+            urlLinks.forEach(link => {
+                const url = link.getAttribute('data-url');
+                if (url && url !== 'null' && !titleCache.has(url) && !failedUrls.has(url)) {
+                    fetchPageTitle(url);
+                }
+            });
+        }
+
+        // Fetch page title from URL
+        async function fetchPageTitle(url) {
+            if (titleCache.has(url) || failedUrls.has(url)) {
+                updateTitleElements(url);
+                return;
+            }
+
+            try {
+                console.log(\`📄 Fetching title for: \${url}\`);
+                
+                // Show loading state
+                showLoadingState(url);
+                
+                // Use a CORS proxy service for cross-origin requests
+                const proxyUrl = \`https://api.allorigins.win/get?url=\${encodeURIComponent(url)}\`;
+                
+                const response = await fetch(proxyUrl, {
+                    method: 'GET',
+                    headers: {
+                        'Accept': 'application/json',
+                    }
+                });
+
+                if (!response.ok) {
+                    throw new Error(\`HTTP error! status: \${response.status}\`);
+                }
+
+                const data = await response.json();
+                const htmlContent = data.contents;
+                
+                // Extract title from HTML
+                const titleMatch = htmlContent.match(/<title[^>]*>([^<]+)<\\/title>/i);
+                const title = titleMatch ? titleMatch[1].trim() : null;
+                
+                if (title && title.length > 0) {
+                    titleCache.set(url, title);
+                    console.log(\`✅ Title found for \${url}: "\${title}"\`);
+                } else {
+                    throw new Error('No title found');
+                }
+                
+                updateTitleElements(url);
+                
+            } catch (error) {
+                console.warn(\`❌ Failed to fetch title for \${url}:\`, error.message);
+                failedUrls.add(url);
+                hideTitleElements(url);
+            }
+        }
+
+        // Show loading state for title elements
+        function showLoadingState(url) {
+            const links = document.querySelectorAll(\`a[data-url="\${url}"][data-title-target]\`);
+            links.forEach(link => {
+                const targetId = link.getAttribute('data-title-target');
+                const titleElement = document.getElementById(targetId);
+                if (titleElement) {
+                    titleElement.style.display = 'flex';
+                    const titleText = titleElement.querySelector('.title-text');
+                    if (titleText) {
+                        titleText.textContent = 'Loading title...';
+                        titleText.setAttribute('data-loading', 'true');
+                        titleText.style.opacity = '0.6';
+                    }
+                }
+            });
+        }
+
+        // Update title elements with fetched title
+        function updateTitleElements(url) {
+            const title = titleCache.get(url);
+            if (!title) return;
+            
+            const links = document.querySelectorAll(\`a[data-url="\${url}"][data-title-target]\`);
+            links.forEach(link => {
+                const targetId = link.getAttribute('data-title-target');
+                const titleElement = document.getElementById(targetId);
+                if (titleElement) {
+                    titleElement.style.display = 'flex';
+                    const titleText = titleElement.querySelector('.title-text');
+                    if (titleText) {
+                        titleText.textContent = title;
+                        titleText.removeAttribute('data-loading');
+                        titleText.style.opacity = '1';
+                        titleText.title = title; // Full title in tooltip
+                    }
+                }
+            });
+        }
+
+        // Hide title elements for failed URLs
+        function hideTitleElements(url) {
+            const links = document.querySelectorAll(\`a[data-url="\${url}"][data-title-target]\`);
+            links.forEach(link => {
+                const targetId = link.getAttribute('data-title-target');
+                const titleElement = document.getElementById(targetId);
+                if (titleElement) {
+                    titleElement.style.display = 'none';
+                }
+            });
+        }
+
+        // Utility function to escape HTML
+        function escapeHtml(unsafe) {
+            return unsafe
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+
         // Keyboard shortcuts
         document.addEventListener('keydown', function(event) {
             // Ctrl/Cmd + Shift + T for theme toggle
             if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key === 'T') {
                 event.preventDefault();
                 toggleTheme();
+            }
+            
+            // Ctrl/Cmd + Shift + R to refresh page titles
+            if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key === 'R') {
+                event.preventDefault();
+                titleCache.clear();
+                failedUrls.clear();
+                fetchAllPageTitles();
             }
         });
     </script>
