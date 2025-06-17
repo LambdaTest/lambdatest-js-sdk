@@ -845,51 +845,74 @@ class UrlTrackerPlugin extends EventEmitter {
                     const testId = ApiUploader.extractTestId(this.testMetadata, this.options);
                     logger.verbose(`Using test ID: ${testId}`);
                     
-                    // Upload to API
-                    logger.verbose(`Calling apiUploader.uploadTrackingResults...`);
-                    const response = await this.apiUploader.uploadTrackingResults(trackingData, testId, {
-                        trackingType: 'url-tracker',
-                        framework: 'Playwright'
-                    });
-                    logger.success('API upload completed successfully');
-                    
-                    // Store the success for later reporting
-                    if (!global._urlTrackerApiSuccesses) {
-                        global._urlTrackerApiSuccesses = [];
-                    }
-                    global._urlTrackerApiSuccesses.push({
-                        testName: this.options.testName,
-                        testId: testId,
-                        timestamp: new Date().toISOString()
-                    });
-                    logger.info(`Stored API success in global._urlTrackerApiSuccesses (now has ${global._urlTrackerApiSuccesses.length} entries)`);
-                } else {
-                    throw new Error('Invalid tracking data - cannot upload to API');
+                                    // Upload to API and WAIT for completion
+                logger.verbose(`Calling apiUploader.uploadTrackingResults...`);
+                logger.info(`[API UPLOAD] Starting upload for "${this.options.testName}" - waiting for completion...`);
+                
+                const response = await this.apiUploader.uploadTrackingResults(trackingData, testId, {
+                    trackingType: 'url-tracker',
+                    framework: 'Playwright'
+                });
+                
+                logger.success('API upload completed successfully');
+                logger.info(`[API UPLOAD] Upload completed for "${this.options.testName}"`);
+                
+                // Store the success for later reporting
+                if (!global._urlTrackerApiSuccesses) {
+                    global._urlTrackerApiSuccesses = [];
                 }
-            } catch (error) {
-                logger.error(`API upload failed: ${error.message}`);
-                // Store the error for later reporting
-                if (!global._urlTrackerApiErrors) {
-                    global._urlTrackerApiErrors = [];
-                }
-                global._urlTrackerApiErrors.push({
+                global._urlTrackerApiSuccesses.push({
                     testName: this.options.testName,
-                    error: error.message,
+                    testId: testId,
                     timestamp: new Date().toISOString()
                 });
-                logger.info(`Stored API error in global._urlTrackerApiErrors (now has ${global._urlTrackerApiErrors.length} entries)`);
-                // Continue with cleanup even if API upload fails
+                logger.info(`[API SUCCESS] Stored success for "${this.options.testName}" - Total successes: ${global._urlTrackerApiSuccesses.length}`);
+                logger.info(`[API SUCCESS] All recorded successes: ${JSON.stringify(global._urlTrackerApiSuccesses.map(s => s.testName))}`);
+                
+                // Add a small delay to ensure the success is properly recorded
+                await new Promise(resolve => setTimeout(resolve, 100));
+                logger.info(`[API SUCCESS] Success recording completed for "${this.options.testName}"`);
+            } else {
+                throw new Error('Invalid tracking data - cannot upload to API');
             }
-        } else {
-            console.log(`[UrlTracker] API upload skipped:`);
-            console.log(`[UrlTracker]   - API upload enabled: ${this.options.enableApiUpload}`);
-            console.log(`[UrlTracker]   - API uploader exists: ${!!this.apiUploader}`);
-            console.log(`[UrlTracker]   - Tracking results count: ${this.trackingResults ? this.trackingResults.length : 0}`);
+                    } catch (error) {
+            logger.error(`[API ERROR] API upload failed for "${this.options.testName}": ${error.message}`);
+            // Store the error for later reporting
+            if (!global._urlTrackerApiErrors) {
+                global._urlTrackerApiErrors = [];
+            }
+            global._urlTrackerApiErrors.push({
+                testName: this.options.testName,
+                error: error.message,
+                timestamp: new Date().toISOString()
+            });
+            logger.info(`[API ERROR] Stored API error for "${this.options.testName}" - Total errors: ${global._urlTrackerApiErrors.length}`);
             
-            logger.info('API upload skipped:');
-            logger.info(`  - API upload enabled: ${this.options.enableApiUpload}`);
-            logger.info(`  - API uploader exists: ${!!this.apiUploader}`);
-            logger.info(`  - Tracking results count: ${this.trackingResults ? this.trackingResults.length : 0}`);
+            // Wait a bit even for errors to ensure proper recording
+            await new Promise(resolve => setTimeout(resolve, 100));
+            logger.info(`[API ERROR] Error recording completed for "${this.options.testName}"`);
+            
+            // Continue with cleanup even if API upload fails
+        }
+        } else {
+            logger.warn(`[API SKIP] API upload skipped for "${this.options.testName}":`);
+            logger.warn(`[API SKIP]   - API upload enabled: ${this.options.enableApiUpload} (type: ${typeof this.options.enableApiUpload})`);
+            logger.warn(`[API SKIP]   - API uploader exists: ${!!this.apiUploader}`);
+            logger.warn(`[API SKIP]   - Tracking results count: ${this.trackingResults ? this.trackingResults.length : 0}`);
+            
+            // Store the skip reason for debugging
+            if (!global._urlTrackerApiSkips) {
+                global._urlTrackerApiSkips = [];
+            }
+            global._urlTrackerApiSkips.push({
+                testName: this.options.testName,
+                reason: `enableApiUpload: ${this.options.enableApiUpload}, hasUploader: ${!!this.apiUploader}, resultsCount: ${this.trackingResults ? this.trackingResults.length : 0}`,
+                timestamp: new Date().toISOString()
+            });
+            
+            // Wait a bit to ensure proper skip recording
+            await new Promise(resolve => setTimeout(resolve, 100));
+            logger.info(`[API SKIP] Skip recording completed for "${this.options.testName}"`);
         }
         
         console.log(`[UrlTracker] === CLEANUP DEBUG END ===`);
@@ -929,19 +952,18 @@ class UrlTrackerPlugin extends EventEmitter {
                 const htmlReportPath = globalHtmlReporter.generateReport([sessionData], 'playwright');
                 logger.success(`Enhanced HTML report generated: ${htmlReportPath}`);
                 
-                // Always show the prompt and auto-open (like Playwright does)
-                // Check if this is the last test cleanup
-                const registry = global._urlTrackerRegistry;
-                const isLastTest = !registry || !registry.trackers || registry.trackers.size <= 1;
-                
-                if (isLastTest) {
-                    showHtmlReportPrompt(globalHtmlReporter, htmlReportPath);
-                }
+                // REMOVED: Faulty last test detection that causes premature HTML report opening
+                // The HTML report will be shown only during global cleanup at the end of all tests
                 
             } catch (htmlError) {
                 logger.error(`Failed to generate HTML report: ${htmlError.message}`);
             }
         }
+        
+        // Add a final delay to ensure all operations are truly complete
+        logger.info(`[CLEANUP] Finalizing cleanup for "${this.options.testName}"...`);
+        await new Promise(resolve => setTimeout(resolve, 200)); // Extra 200ms safety delay
+        logger.info(`[CLEANUP] Cleanup fully completed for "${this.options.testName}"`);
         
         this.preserveHistory = true;
         await this.destroy();
@@ -1075,11 +1097,14 @@ class UrlTrackerPlugin extends EventEmitter {
                     fs.mkdirSync(outputDir, { recursive: true, mode: 0o777 });
                 }
 
-                // Create current session data structure
+                // Create current session data structure with consistent session ID per test
+                const testIdentifier = `${this.options.testName}_${this.options.specFile}`.replace(/\s+/g, '_').toLowerCase();
+                const currentSessionId = this.testMetadata?.session_id || this.testMetadata?.build_id || `session_${testIdentifier}_${Date.now()}`;
+                
                 const currentSessionData = {
                     metadata: this.testMetadata || {},
                     navigations: this.trackingResults,
-                    session_id: this.testMetadata?.session_id || this.testMetadata?.build_id || `session_${Date.now()}`,
+                    session_id: currentSessionId,
                     spec_file: this.options.specFile  // Store spec file at the session level for easier updating
                 };
 
@@ -1174,12 +1199,15 @@ class UrlTrackerPlugin extends EventEmitter {
                     }
                 });
 
-                // Check if this session already exists in the file (based on session ID)
-                const sessionId = currentSessionData.session_id;
+                // Check if this session already exists in the file (based on test name and spec file)
                 const existingSessionIndex = allSessions.findIndex(session => 
-                    session.session_id === sessionId || 
-                    (session.metadata && session.metadata.session_id === sessionId) ||
-                    (session.metadata && session.metadata.build_id === sessionId)
+                    session.session_id === currentSessionId || 
+                    (session.metadata && session.metadata.session_id === currentSessionId) ||
+                    (session.metadata && session.metadata.build_id === currentSessionId) ||
+                    // Also match by test name and spec file to consolidate duplicate sessions
+                    (session.spec_file === this.options.specFile && 
+                     session.metadata && session.metadata.data && 
+                     session.metadata.data.name && session.metadata.data.name.includes(this.options.testName))
                 );
 
                 if (existingSessionIndex >= 0) {
@@ -1342,10 +1370,10 @@ class UrlTrackerPlugin extends EventEmitter {
             // Use the class method to ensure output files exist
             this.ensureOutputFilesExist();
             
-            // If we have results to save, save them now to prevent data loss
-            if (this.trackingResults && this.trackingResults.length > 0) {
-                this.exportResults();
-            }
+            // IMPORTANT: Do NOT export results after every navigation
+            // Results will be exported only once during cleanup to prevent duplicates
+            // This method now only ensures output files exist for final export
+            
         } catch (e) {
             logger.error('Error in saveResultsToFile:', e);
         }
@@ -1564,10 +1592,14 @@ class UrlTrackerPlugin extends EventEmitter {
             }
         });
 
-        // SIGINT handler (Ctrl+C)
+        // SIGINT handler (Ctrl+C) - this can be async and will wait
         process.on('SIGINT', async () => {
-            logger.info('SIGINT received - performing global cleanup');
+            logger.info('SIGINT received - performing comprehensive cleanup with waiting');
             try {
+                // First wait a bit for any pending API uploads
+                logger.info('Waiting for pending API uploads...');
+                await new Promise(resolve => setTimeout(resolve, 3000)); // Wait 3 seconds
+                
                 const registry = global._urlTrackerRegistry;
                 if (registry && registry.trackers) {
                     for (const [id, tracker] of registry.trackers) {
@@ -1583,10 +1615,14 @@ class UrlTrackerPlugin extends EventEmitter {
             process.exit(0);
         });
 
-        // SIGTERM handler (process termination)
+        // SIGTERM handler (process termination) - this can be async and will wait
         process.on('SIGTERM', async () => {
-            logger.info('SIGTERM received - performing global cleanup');
+            logger.info('SIGTERM received - performing comprehensive cleanup with waiting');
             try {
+                // First wait a bit for any pending API uploads
+                logger.info('Waiting for pending API uploads...');
+                await new Promise(resolve => setTimeout(resolve, 3000)); // Wait 3 seconds
+                
                 const registry = global._urlTrackerRegistry;
                 if (registry && registry.trackers) {
                     for (const [id, tracker] of registry.trackers) {
@@ -1944,24 +1980,44 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
     if (!global._urlTrackerRegistry.cleanupHandlersRegistered) {
         logger.verbose('Registering global URL tracker cleanup handlers...');
         
-        // Process exit handler
-        process.on('exit', () => {
-            logger.info('Process exit detected - performing URL tracker cleanup');
+        // beforeExit handler - runs before exit and can be async
+        process.on('beforeExit', async (code) => {
+            logger.info('Process beforeExit detected - waiting for pending operations');
             try {
-                // Use the global cleanup function
+                // Wait for any pending API uploads before exit
+                logger.info('Giving pending API uploads time to complete...');
+                await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds
+                
+                // Call the full global cleanup with waiting
+                await performGlobalUrlTrackerCleanup();
+                
+            } catch (e) {
+                logger.error('Error during beforeExit cleanup:', e);
+            }
+        });
+
+        // Process exit handler - synchronous, no async operations allowed
+        process.on('exit', () => {
+            logger.info('Process exit detected - performing synchronous cleanup');
+            try {
+                // Only do synchronous operations here
                 const registry = global._urlTrackerRegistry;
                 if (registry && registry.trackers) {
                     registry.trackers.forEach((tracker, testName) => {
-                    if (tracker && typeof tracker.exportResults === 'function') {
-                        tracker.exportResults();
-                    }
-                });
-            }
+                        if (tracker && typeof tracker.exportResults === 'function') {
+                            tracker.exportResults();
+                        }
+                    });
+                }
                 
-                // Generate API Upload Report
-                generateApiUploadReport();
+                // Generate API Upload Report (synchronous only)
+                try {
+                    generateApiUploadReport();
+                } catch (reportError) {
+                    logger.error('Error generating API upload report:', reportError);
+                }
                 
-        } catch (e) {
+            } catch (e) {
                 logger.error('Error during process exit cleanup:', e);
             }
         });
@@ -2104,6 +2160,11 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
                         await urlTracker.cleanup();
                         logger.info(`Automatic cleanup completed for URL tracker: ${testName}`);
                         
+                        // Add extra delay to ensure API operations complete
+                        logger.info(`Ensuring all API operations complete for: ${testName}`);
+                        await new Promise(resolve => setTimeout(resolve, 500)); // Extra 500ms delay
+                        logger.info(`All operations confirmed complete for: ${testName}`);
+                        
                         // Remove from global registry after cleanup
                         global._urlTrackerRegistry.trackers.delete(uniqueTestId);
                     } else {
@@ -2221,33 +2282,8 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
                 }
             }
             
-            // Check if this is the last test
-            if (testInfo.workerIndex === 0) {  // Only check in the first worker
-                const remainingTests = testInfo.project.metadata.totalTestCount - testInfo.testId;
-                if (remainingTests === 0) {
-                    // This is the last test
-                    process.env.PLAYWRIGHT_TEST_END = 'true';
-                    global._playwrightAllTestsComplete = true;
-                    
-                    // Show the HTML report prompt
-                    const resultsDir = path.join(process.cwd(), 'test-results');
-                    const reportPath = path.join(resultsDir, 'url-tracking-report.html');
-                    if (fs.existsSync(reportPath)) {
-                        // Add a small delay to ensure this shows after all test output
-                        setTimeout(() => {
-                            console.log('\n');
-                            console.log('  URL Tracking Report is ready:');
-                            console.log(`  ${reportPath}`);
-                            console.log('\n  Press "o" to open the report in your browser');
-                            console.log('  Press "Ctrl+C" to exit\n');
-                            
-                            if (globalHtmlReporter) {
-                                globalHtmlReporter.setupKeyboardShortcut();
-                            }
-                        }, 500);
-                    }
-                }
-            }
+            // REMOVED: Unreliable last test detection that causes premature HTML report opening
+            // The HTML report will be shown only during process exit handlers for maximum reliability
         }
     };
 };
@@ -2261,13 +2297,15 @@ function generateApiUploadReport() {
         const apiErrors = global._urlTrackerApiErrors || [];
         const apiSuccesses = global._urlTrackerApiSuccesses || [];
         const cleanupCalls = global._urlTrackerCleanupCalls || [];
+        const apiSkips = global._urlTrackerApiSkips || [];
         
         // Debug logging to help identify issues
         logger.verbose(`=== API UPLOAD REPORT DEBUG ===`);
-        logger.verbose(`API Upload Report Debug: Found ${apiErrors.length} errors and ${apiSuccesses.length} successes`);
+        logger.verbose(`API Upload Report Debug: Found ${apiErrors.length} errors, ${apiSuccesses.length} successes, ${apiSkips.length} skips`);
         logger.verbose(`Cleanup calls made: ${cleanupCalls.length}`);
         logger.verbose(`Global API errors object exists: ${!!global._urlTrackerApiErrors}`);
         logger.verbose(`Global API successes object exists: ${!!global._urlTrackerApiSuccesses}`);
+        logger.verbose(`Global API skips object exists: ${!!global._urlTrackerApiSkips}`);
         
         // Show cleanup call details
         if (cleanupCalls.length > 0) {
@@ -2287,6 +2325,9 @@ function generateApiUploadReport() {
         }
         if (global._urlTrackerApiSuccesses) {
             logger.verbose(`API Successes content: ${JSON.stringify(global._urlTrackerApiSuccesses, null, 2)}`);
+        }
+        if (global._urlTrackerApiSkips) {
+            logger.verbose(`API Skips content: ${JSON.stringify(global._urlTrackerApiSkips, null, 2)}`);
         }
         
         // Show all global properties related to URL tracker
@@ -2381,6 +2422,14 @@ function generateApiUploadReport() {
 function performGlobalUrlTrackerCleanup() {
     return new Promise(async (resolve) => {
         try {
+            // Prevent multiple cleanup calls
+            if (global._urlTrackerGlobalCleanupCalled) {
+                logger.info('Global cleanup already called, skipping');
+                resolve();
+                return;
+            }
+            global._urlTrackerGlobalCleanupCalled = true;
+            
             logger.info('=== PERFORMING GLOBAL URL TRACKER CLEANUP ===');
             
             const registry = global._urlTrackerRegistry;
@@ -2427,6 +2476,106 @@ function performGlobalUrlTrackerCleanup() {
                 }
                 
                 registry.testEndCallbacks.clear();
+            }
+            
+            // Wait for any pending cleanup operations and API uploads to complete
+            logger.info('Waiting for any pending cleanup operations and API uploads to complete...');
+            
+            // Store the initial count of cleanup calls
+            const initialCleanupCalls = global._urlTrackerCleanupCalls ? global._urlTrackerCleanupCalls.length : 0;
+            const initialApiSuccesses = global._urlTrackerApiSuccesses ? global._urlTrackerApiSuccesses.length : 0;
+            
+            logger.info(`Initial state: ${initialCleanupCalls} cleanup calls, ${initialApiSuccesses} API successes`);
+            
+            // Wait longer for cleanup operations to complete - this is the critical part
+            let waitTime = 0;
+            const maxWaitTime = 30000; // Maximum 30 seconds total (increased)
+            const checkInterval = 1000; // Check every 1 second (increased for stability)
+            let lastLogTime = 0;
+            
+            while (waitTime < maxWaitTime) {
+                const currentCleanupCalls = global._urlTrackerCleanupCalls ? global._urlTrackerCleanupCalls.length : 0;
+                const currentApiSuccesses = global._urlTrackerApiSuccesses ? global._urlTrackerApiSuccesses.length : 0;
+                const currentApiErrors = global._urlTrackerApiErrors ? global._urlTrackerApiErrors.length : 0;
+                const totalApiAttempts = currentApiSuccesses + currentApiErrors;
+                
+                // Log progress every 2 seconds
+                if (waitTime - lastLogTime >= 2000) {
+                    const currentApiSkips = global._urlTrackerApiSkips ? global._urlTrackerApiSkips.length : 0;
+                    logger.info(`Progress: ${currentCleanupCalls} cleanup calls, ${currentApiSuccesses} successes, ${currentApiErrors} errors, ${currentApiSkips} skips`);
+                    lastLogTime = waitTime;
+                }
+                
+                // Check if all cleanup calls have corresponding API results (success or error)
+                // We need to account for both API uploads and potential skips
+                const currentApiSkips = global._urlTrackerApiSkips ? global._urlTrackerApiSkips.length : 0;
+                const totalApiOperations = currentApiSuccesses + currentApiErrors + currentApiSkips;
+                
+                if (currentCleanupCalls > 0 && totalApiOperations >= currentCleanupCalls) {
+                    logger.info(`All cleanup operations completed after waiting ${waitTime}ms`);
+                    logger.info(`Final: ${currentCleanupCalls} cleanup calls, ${totalApiOperations} total API operations (${currentApiSuccesses} successes, ${currentApiErrors} errors, ${currentApiSkips} skips)`);
+                    break;
+                }
+                
+                // Also check if there are any active trackers still processing
+                let hasActiveTrackers = false;
+                if (registry.trackers && registry.trackers.size > 0) {
+                    for (const [testId, tracker] of registry.trackers) {
+                        if (tracker && !tracker.cleanupCalled) {
+                            hasActiveTrackers = true;
+                            break;
+                        }
+                    }
+                }
+                
+                if (!hasActiveTrackers && currentCleanupCalls > 0 && totalApiOperations >= currentCleanupCalls) {
+                    logger.info(`No active trackers and all API operations completed after waiting ${waitTime}ms`);
+                    break;
+                }
+                
+                await new Promise(resolve => setTimeout(resolve, checkInterval));
+                waitTime += checkInterval;
+            }
+            
+            if (waitTime >= maxWaitTime) {
+                const finalCleanupCalls = global._urlTrackerCleanupCalls ? global._urlTrackerCleanupCalls.length : 0;
+                const finalApiSuccesses = global._urlTrackerApiSuccesses ? global._urlTrackerApiSuccesses.length : 0;
+                const finalApiErrors = global._urlTrackerApiErrors ? global._urlTrackerApiErrors.length : 0;
+                logger.warn(`Timed out after ${maxWaitTime}ms waiting for operations to complete`);
+                logger.warn(`Final state: ${finalCleanupCalls} cleanup calls, ${finalApiSuccesses} API successes, ${finalApiErrors} API errors`);
+            }
+            
+            // Clean up duplicate sessions before generating reports
+            try {
+                const resultsFile = path.join(process.cwd(), 'test-results', 'url-tracking-results.json');
+                if (fs.existsSync(resultsFile)) {
+                    logger.info('Cleaning up duplicate session entries...');
+                    const fileContent = fs.readFileSync(resultsFile, 'utf-8');
+                    const allSessions = JSON.parse(fileContent);
+                    
+                    // Deduplicate sessions by test name and spec file, keeping the one with most navigations
+                    const deduplicatedSessions = [];
+                    const seenTests = new Map();
+                    
+                    for (const session of allSessions) {
+                        const testKey = `${session.spec_file}_${session.metadata?.data?.name || 'unknown'}`;
+                        const existing = seenTests.get(testKey);
+                        
+                        if (!existing || (session.navigations && session.navigations.length > existing.navigations.length)) {
+                            seenTests.set(testKey, session);
+                        }
+                    }
+                    
+                    // Convert back to array
+                    deduplicatedSessions.push(...seenTests.values());
+                    
+                    if (deduplicatedSessions.length !== allSessions.length) {
+                        logger.info(`Removed ${allSessions.length - deduplicatedSessions.length} duplicate session entries`);
+                        fs.writeFileSync(resultsFile, JSON.stringify(deduplicatedSessions, null, 2));
+                    }
+                }
+            } catch (cleanupError) {
+                logger.error('Error cleaning up duplicate sessions:', cleanupError);
             }
             
             // Generate final API upload report

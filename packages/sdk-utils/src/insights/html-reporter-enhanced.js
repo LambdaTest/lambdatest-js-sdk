@@ -306,7 +306,7 @@ return `<!DOCTYPE html>
                     </svg>
                     Test Sessions
                 </div>
-                <span style="background: var(--color-neutral-muted); border: 1px solid var(--color-border-default); border-radius: 12px; padding: 2px 8px; font-size: 12px; font-weight: 500; color: var(--color-fg-muted);">${framework}</span>
+                ${this.generateFrameworkBadge(framework)}
                 </div>
             <div>
                 ${this.generateInlineSessionsList(reportData.sessions, framework)}
@@ -838,7 +838,7 @@ return `<!DOCTYPE html>
                             </div>
                             <div class="flex-shrink-0 ml-2">
                                 <div class="d-flex flex-items-center">
-                                    <span class="Label Label--secondary mr-2">${framework}</span>
+                                    ${this.generateFrameworkBadge(framework)}
                         ${this.generateStatusBadge(session.status)}
                                     <button class="btn-octicon ml-2 session-chevron" type="button" onclick="toggleSession('${session.session_id}')">
                                         <svg class="octicon octicon-chevron-down" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
@@ -1389,6 +1389,116 @@ return `<!DOCTYPE html>
         
         const statusInfo = statusMap[status] || { class: 'secondary', icon: '?' };
         return `<span class="Label Label--${statusInfo.class}">${statusInfo.icon} ${status}</span>`;
+    }
+
+    /**
+     * Generate framework badge with appropriate logo
+     */
+    generateFrameworkBadge(framework) {
+        const frameworkInfo = this.getFrameworkInfo(framework);
+        
+        // For frameworks with image URLs, display only the image
+        if (frameworkInfo.logoUrl) {
+            return `
+            <img src="${frameworkInfo.logoUrl}" 
+                 alt="${frameworkInfo.displayName}" 
+                 title="${frameworkInfo.displayName}"
+                 style="width: 120px; height: 24px; object-fit: contain; vertical-align: middle;"
+                 onerror="this.style.display='none';" />
+            `;
+        }
+        
+        // For frameworks with SVG logos, use the old badge style
+        return `
+        <span style="background: ${frameworkInfo.bgColor}; border: 1px solid ${frameworkInfo.borderColor}; border-radius: 12px; padding: 4px 8px; font-size: 12px; font-weight: 500; color: ${frameworkInfo.textColor}; display: inline-flex; align-items: center; gap: 4px;">
+            ${frameworkInfo.logo}
+            ${frameworkInfo.displayName}
+        </span>
+        `;
+    }
+
+    /**
+     * Get framework information including logo and styling
+     */
+    getFrameworkInfo(framework) {
+        const frameworkMap = {
+                         'playwright': {
+                 displayName: 'Playwright',
+                 logoUrl: 'https://latestlogo.com/wp-content/uploads/2024/02/playwright-logo.png'
+             },
+            'appium': {
+                displayName: 'Appium',
+                bgColor: '#7B68EE',
+                borderColor: '#7B68EE',
+                textColor: '#ffffff',
+                logo: `
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-2-8c0 1.1.9 2 2 2s2-.9 2-2-.9-2-2-2-2 .9-2 2z"/>
+                </svg>
+                `
+            },
+            'cypress': {
+                displayName: 'Cypress',
+                bgColor: '#17202C',
+                borderColor: '#17202C',
+                textColor: '#ffffff',
+                logo: `
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z"/>
+                </svg>
+                `
+            },
+            'selenium': {
+                displayName: 'Selenium',
+                bgColor: '#43B02A',
+                borderColor: '#43B02A',
+                textColor: '#ffffff',
+                logo: `
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-5-9l1.41 1.41L11 9.83V17h2V9.83l2.59 2.58L17 11l-5-5-5 5z"/>
+                </svg>
+                `
+            },
+                         'webdriverio': {
+                 displayName: 'WebDriverIO',
+                 logoUrl: 'https://res.cloudinary.com/practicaldev/image/fetch/s--vkm_jIDa--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_800/https://i.imgur.com/2uWTVHO.png'
+             },
+            'testcafe': {
+                displayName: 'TestCafe',
+                bgColor: '#36B6D4',
+                borderColor: '#36B6D4',
+                textColor: '#ffffff',
+                logo: `
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z"/>
+                </svg>
+                `
+            },
+            'puppeteer': {
+                displayName: 'Puppeteer',
+                bgColor: '#40B5A4',
+                borderColor: '#40B5A4',
+                textColor: '#ffffff',
+                logo: `
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z"/>
+                </svg>
+                `
+            }
+        };
+
+        // Return default styling for unknown frameworks
+        return frameworkMap[framework.toLowerCase()] || {
+            displayName: framework.charAt(0).toUpperCase() + framework.slice(1),
+            bgColor: 'var(--color-neutral-muted)',
+            borderColor: 'var(--color-border-default)',
+            textColor: 'var(--color-fg-muted)',
+            logo: `
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z"/>
+            </svg>
+            `
+        };
     }
 
 
