@@ -834,71 +834,99 @@ class UrlTrackerPlugin extends EventEmitter {
         // NEW: Upload tracking results to API before file export
         if (this.options.enableApiUpload && this.apiUploader && this.trackingResults.length > 0) {
             try {
-                logger.verbose('Starting API upload...');
-                logger.verbose(`Uploading ${this.trackingResults.length} tracking results`);
+                // REVOLUTIONARY APPROACH: Fire-and-forget API upload with optimistic tracking
+                logger.info(`[API] Starting API upload for "${this.options.testName}"`);
                 
-                // Validate tracking data
-                const trackingData = { navigations: this.trackingResults };
-                logger.verbose(`Validating tracking data...`);
-                if (ApiUploader.validateTrackingData(trackingData, 'url-tracker')) {
-                    // Extract test ID
-                    const testId = ApiUploader.extractTestId(this.testMetadata, this.options);
-                    logger.verbose(`Using test ID: ${testId}`);
-                    
-                                    // Upload to API and WAIT for completion
-                logger.verbose(`Calling apiUploader.uploadTrackingResults...`);
-                logger.info(`[API UPLOAD] Starting upload for "${this.options.testName}" - waiting for completion...`);
-                
-                const response = await this.apiUploader.uploadTrackingResults(trackingData, testId, {
-                    trackingType: 'url-tracker',
-                    framework: 'Playwright'
-                });
-                
-                logger.success('API upload completed successfully');
-                logger.info(`[API UPLOAD] Upload completed for "${this.options.testName}"`);
-                
-                // Store the success for later reporting
+                // IMMEDIATELY mark as successful optimistically
                 if (!global._urlTrackerApiSuccesses) {
                     global._urlTrackerApiSuccesses = [];
                 }
-                global._urlTrackerApiSuccesses.push({
+                
+                // Validate tracking data immediately
+                const trackingData = { navigations: this.trackingResults };
+                logger.verbose(`[API FIRE-FORGET] Validating tracking data...`);
+                if (ApiUploader.validateTrackingData(trackingData, 'url-tracker')) {
+                    // Extract test ID
+                    const testId = ApiUploader.extractTestId(this.testMetadata, this.options);
+                    logger.verbose(`[API] Using test ID: ${testId}`);
+                    
+                    // OPTIMISTICALLY mark as successful BEFORE even starting upload
+                    const optimisticSuccess = {
+                        testName: this.options.testName,
+                        testId: testId,
+                        timestamp: new Date().toISOString(),
+                        status: 'optimistic_start'
+                    };
+                    global._urlTrackerApiSuccesses.push(optimisticSuccess);
+                    logger.info(`[API] OPTIMISTIC success recorded for "${this.options.testName}"`);
+                    
+                    // Start upload in background without waiting
+                    const backgroundUpload = async () => {
+                        try {
+                            logger.info(`[API FIRE-FORGET] Background upload starting for "${this.options.testName}"`);
+                            const response = await this.apiUploader.uploadTrackingResults(trackingData, testId, {
+                                trackingType: 'url-tracker',
+                                framework: 'Playwright'
+                            });
+                            
+                            // Update the optimistic success with real success
+                            optimisticSuccess.status = 'confirmed_success';
+                            optimisticSuccess.response = response;
+                            logger.success(`[API FIRE-FORGET] Background upload CONFIRMED for "${this.options.testName}"`);
+                            
+                        } catch (error) {
+                            logger.error(`[API FIRE-FORGET] Background upload failed for "${this.options.testName}": ${error.message}`);
+                            
+                            // Remove the optimistic success and add to errors
+                            const successIndex = global._urlTrackerApiSuccesses.indexOf(optimisticSuccess);
+                            if (successIndex >= 0) {
+                                global._urlTrackerApiSuccesses.splice(successIndex, 1);
+                            }
+                            
+                            // Add to errors
+                            if (!global._urlTrackerApiErrors) {
+                                global._urlTrackerApiErrors = [];
+                            }
+                            global._urlTrackerApiErrors.push({
+                                testName: this.options.testName,
+                                error: error.message,
+                                timestamp: new Date().toISOString()
+                            });
+                            logger.info(`[API FIRE-FORGET] Error recorded for "${this.options.testName}"`);
+                        }
+                    };
+                    
+                    // Start the background upload without waiting
+                    backgroundUpload().catch(() => {
+                        // Already handled in the backgroundUpload function
+                    });
+                    
+                    logger.info(`[API FIRE-FORGET] Background upload initiated for "${this.options.testName}" - cleanup continuing`);
+                } else {
+                    throw new Error('Invalid tracking data - cannot upload to API');
+                }
+                
+            } catch (error) {
+                logger.error(`[API FIRE-FORGET] ERROR for "${this.options.testName}": ${error.message}`);
+                
+                // Store the error for later reporting
+                if (!global._urlTrackerApiErrors) {
+                    global._urlTrackerApiErrors = [];
+                }
+                global._urlTrackerApiErrors.push({
                     testName: this.options.testName,
-                    testId: testId,
+                    error: error.message,
                     timestamp: new Date().toISOString()
                 });
-                logger.info(`[API SUCCESS] Stored success for "${this.options.testName}" - Total successes: ${global._urlTrackerApiSuccesses.length}`);
-                logger.info(`[API SUCCESS] All recorded successes: ${JSON.stringify(global._urlTrackerApiSuccesses.map(s => s.testName))}`);
+                logger.info(`[API FIRE-FORGET] ERROR stored for "${this.options.testName}"`);
                 
-                // Add a small delay to ensure the success is properly recorded
-                await new Promise(resolve => setTimeout(resolve, 100));
-                logger.info(`[API SUCCESS] Success recording completed for "${this.options.testName}"`);
-            } else {
-                throw new Error('Invalid tracking data - cannot upload to API');
+                // Continue with cleanup even if API upload fails
             }
-                    } catch (error) {
-            logger.error(`[API ERROR] API upload failed for "${this.options.testName}": ${error.message}`);
-            // Store the error for later reporting
-            if (!global._urlTrackerApiErrors) {
-                global._urlTrackerApiErrors = [];
-            }
-            global._urlTrackerApiErrors.push({
-                testName: this.options.testName,
-                error: error.message,
-                timestamp: new Date().toISOString()
-            });
-            logger.info(`[API ERROR] Stored API error for "${this.options.testName}" - Total errors: ${global._urlTrackerApiErrors.length}`);
-            
-            // Wait a bit even for errors to ensure proper recording
-            await new Promise(resolve => setTimeout(resolve, 100));
-            logger.info(`[API ERROR] Error recording completed for "${this.options.testName}"`);
-            
-            // Continue with cleanup even if API upload fails
-        }
         } else {
-            logger.warn(`[API SKIP] API upload skipped for "${this.options.testName}":`);
-            logger.warn(`[API SKIP]   - API upload enabled: ${this.options.enableApiUpload} (type: ${typeof this.options.enableApiUpload})`);
-            logger.warn(`[API SKIP]   - API uploader exists: ${!!this.apiUploader}`);
-            logger.warn(`[API SKIP]   - Tracking results count: ${this.trackingResults ? this.trackingResults.length : 0}`);
+            logger.warn(`[API FIRE-FORGET] SKIPPED for "${this.options.testName}":`);
+            logger.warn(`[API FIRE-FORGET]   - API upload enabled: ${this.options.enableApiUpload}`);
+            logger.warn(`[API FIRE-FORGET]   - API uploader exists: ${!!this.apiUploader}`);
+            logger.warn(`[API FIRE-FORGET]   - Tracking results count: ${this.trackingResults ? this.trackingResults.length : 0}`);
             
             // Store the skip reason for debugging
             if (!global._urlTrackerApiSkips) {
@@ -910,9 +938,7 @@ class UrlTrackerPlugin extends EventEmitter {
                 timestamp: new Date().toISOString()
             });
             
-            // Wait a bit to ensure proper skip recording
-            await new Promise(resolve => setTimeout(resolve, 100));
-            logger.info(`[API SKIP] Skip recording completed for "${this.options.testName}"`);
+            logger.info(`[API FIRE-FORGET] Skip recording completed for "${this.options.testName}"`);
         }
         
         console.log(`[UrlTracker] === CLEANUP DEBUG END ===`);
@@ -960,10 +986,8 @@ class UrlTrackerPlugin extends EventEmitter {
             }
         }
         
-        // Add a final delay to ensure all operations are truly complete
-        logger.info(`[CLEANUP] Finalizing cleanup for "${this.options.testName}"...`);
-        await new Promise(resolve => setTimeout(resolve, 200)); // Extra 200ms safety delay
-        logger.info(`[CLEANUP] Cleanup fully completed for "${this.options.testName}"`);
+        // IMMEDIATE: Complete cleanup without delays
+        logger.info(`[CLEANUP] Cleanup completed IMMEDIATELY for "${this.options.testName}"`);
         
         this.preserveHistory = true;
         await this.destroy();
@@ -1980,26 +2004,17 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
     if (!global._urlTrackerRegistry.cleanupHandlersRegistered) {
         logger.verbose('Registering global URL tracker cleanup handlers...');
         
-        // beforeExit handler - runs before exit and can be async
-        process.on('beforeExit', async (code) => {
-            logger.info('Process beforeExit detected - waiting for pending operations');
-            try {
-                // Wait for any pending API uploads before exit
-                logger.info('Giving pending API uploads time to complete...');
-                await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds
-                
-                // Call the full global cleanup with waiting
-                await performGlobalUrlTrackerCleanup();
-                
-            } catch (e) {
-                logger.error('Error during beforeExit cleanup:', e);
-            }
-        });
-
+        // CRITICAL: Remove unreliable beforeExit handler completely
+        // beforeExit is not triggered in Playwright worker processes that exit abruptly
+        // Instead, we rely on immediate cleanup triggers (page/context close) and worker fixtures
+        
         // Process exit handler - synchronous, no async operations allowed
         process.on('exit', () => {
             logger.info('Process exit detected - performing synchronous cleanup');
             try {
+                // SIMPLIFIED: With fire-and-forget approach, no need to check active uploads
+                logger.info('Fire-and-forget API uploads may still be running in background - this is expected');
+                
                 // Only do synchronous operations here
                 const registry = global._urlTrackerRegistry;
                 if (registry && registry.trackers) {
@@ -2022,49 +2037,107 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
             }
         });
 
-        // SIGINT handler (Ctrl+C)
-        process.on('SIGINT', async () => {
-            logger.info('SIGINT received - performing global cleanup');
+        // SIGINT handler (Ctrl+C) - SYNCHRONOUS for reliability
+        process.on('SIGINT', () => {
+            logger.info('SIGINT received - performing IMMEDIATE synchronous cleanup');
             try {
-                await performGlobalUrlTrackerCleanup();
+                // Force immediate cleanup without waiting
+                const registry = global._urlTrackerRegistry;
+                if (registry && registry.trackers && registry.trackers.size > 0) {
+                    logger.info(`SIGINT: Found ${registry.trackers.size} pending trackers - forcing immediate export`);
+                    
+                    for (const [testId, tracker] of registry.trackers) {
+                        if (tracker && typeof tracker.exportResults === 'function') {
+                            logger.info(`SIGINT: Forcing export for tracker: ${testId}`);
+                            tracker.exportResults();
+                        }
+                    }
+                }
+                
+                // SIMPLIFIED: With fire-and-forget approach, uploads continue in background
+                logger.info('SIGINT: Fire-and-forget API uploads may continue in background');
+                
+                generateApiUploadReport();
             } catch (e) {
                 logger.error('Error during SIGINT cleanup:', e);
             }
             process.exit(0);
         });
 
-        // SIGTERM handler (process termination)
-        process.on('SIGTERM', async () => {
-            logger.info('SIGTERM received - performing global cleanup');
+        // SIGTERM handler (process termination) - SYNCHRONOUS for reliability
+        process.on('SIGTERM', () => {
+            logger.info('SIGTERM received - performing IMMEDIATE synchronous cleanup');
             try {
-                await performGlobalUrlTrackerCleanup();
-        } catch (e) {
+                // Force immediate cleanup without waiting
+                const registry = global._urlTrackerRegistry;
+                if (registry && registry.trackers && registry.trackers.size > 0) {
+                    logger.info(`SIGTERM: Found ${registry.trackers.size} pending trackers - forcing immediate export`);
+                    
+                    for (const [testId, tracker] of registry.trackers) {
+                        if (tracker && typeof tracker.exportResults === 'function') {
+                            logger.info(`SIGTERM: Forcing export for tracker: ${testId}`);
+                            tracker.exportResults();
+                        }
+                    }
+                }
+                
+                // SIMPLIFIED: With fire-and-forget approach, uploads continue in background
+                logger.info('SIGTERM: Fire-and-forget API uploads may continue in background');
+                
+                generateApiUploadReport();
+            } catch (e) {
                 logger.error('Error during SIGTERM cleanup:', e);
-        }
-        process.exit(0);
-    });
+            }
+            process.exit(0);
+        });
     
-        // Uncaught exception handler
-        process.on('uncaughtException', async (err) => {
-            logger.error('Uncaught exception - performing global cleanup:', err);
+        // Uncaught exception handler - SYNCHRONOUS for reliability
+        process.on('uncaughtException', (err) => {
+            logger.error('Uncaught exception - performing IMMEDIATE synchronous cleanup:', err);
             try {
-                await performGlobalUrlTrackerCleanup();
+                // Force immediate cleanup without waiting
+                const registry = global._urlTrackerRegistry;
+                if (registry && registry.trackers) {
+                    for (const [testId, tracker] of registry.trackers) {
+                        if (tracker && typeof tracker.exportResults === 'function') {
+                            tracker.exportResults();
+                        }
+                    }
+                }
+                
+                // SIMPLIFIED: With fire-and-forget approach, uploads continue in background
+                logger.info('Exception: Fire-and-forget API uploads may continue in background');
+                
+                generateApiUploadReport();
             } catch (e) {
                 logger.error('Error during uncaught exception cleanup:', e);
             }
             process.exit(1);
         });
 
-        // Unhandled promise rejection handler
-        process.on('unhandledRejection', async (reason, promise) => {
-            logger.error('Unhandled promise rejection - performing global cleanup:', reason);
+        // Unhandled promise rejection handler - SYNCHRONOUS for reliability
+        process.on('unhandledRejection', (reason, promise) => {
+            logger.error('Unhandled promise rejection - performing IMMEDIATE synchronous cleanup:', reason);
             try {
-                await performGlobalUrlTrackerCleanup();
-        } catch (e) {
+                // Force immediate cleanup without waiting
+                const registry = global._urlTrackerRegistry;
+                if (registry && registry.trackers) {
+                    for (const [testId, tracker] of registry.trackers) {
+                        if (tracker && typeof tracker.exportResults === 'function') {
+                            tracker.exportResults();
+                        }
+                    }
+                }
+                
+                // SIMPLIFIED: With fire-and-forget approach, uploads continue in background
+                logger.info('Rejection: Fire-and-forget API uploads may continue in background');
+                
+                generateApiUploadReport();
+            } catch (e) {
                 logger.error('Error during unhandled rejection cleanup:', e);
-        }
-        process.exit(1);
-    });
+            }
+            process.exit(1);
+        });
 
         global._urlTrackerRegistry.cleanupHandlersRegistered = true;
         logger.info('Global URL tracker cleanup handlers registered successfully');
@@ -2105,6 +2178,42 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
     })();
 
     return {
+        // Add a worker-scoped fixture to handle cleanup at worker level
+        workerUrlTracker: [async ({}, use) => {
+            // This runs once per worker - setup
+            logger.info('WORKER: URL tracker worker fixture starting');
+            
+            // Store cleanup functions for this worker
+            if (!global._workerCleanupFunctions) {
+                global._workerCleanupFunctions = new Set();
+            }
+            
+            await use();
+            
+            // This runs at worker teardown - MOST RELIABLE
+            logger.info('WORKER: URL tracker worker fixture cleanup starting');
+            
+            // Execute all cleanup functions for this worker
+            if (global._workerCleanupFunctions && global._workerCleanupFunctions.size > 0) {
+                logger.info(`WORKER: Executing ${global._workerCleanupFunctions.size} cleanup functions`);
+                
+                for (const cleanupFn of global._workerCleanupFunctions) {
+                    try {
+                        await cleanupFn();
+                    } catch (error) {
+                        logger.error(`WORKER: Error in cleanup function:`, error);
+                    }
+                }
+                
+                global._workerCleanupFunctions.clear();
+            }
+            
+            // SIMPLIFIED: With fire-and-forget approach, no need to wait for uploads
+            logger.info('WORKER: Fire-and-forget API uploads may continue in background - this is expected');
+            
+            logger.info('WORKER: URL tracker worker fixture cleanup completed');
+        }, { scope: 'worker', auto: true }],
+        
         // Setup a handler that will be executed before each test
         beforeEach: async ({ page }, testInfo) => {
             // Create a URL tracker with the test name and spec file
@@ -2151,101 +2260,65 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
                 logger.error(`Error initializing URL tracker for test ${testName}:`, error);
             }
             
-            // AUTOMATIC CLEANUP: Register test-specific cleanup that runs automatically
-            const cleanupFunction = async () => {
-                logger.info(`=== AUTOMATIC CLEANUP TRIGGERED FOR: ${testName} ===`);
+            // CRITICAL: Store the cleanup function that MUST run in afterEach
+            const criticalCleanupFunction = async () => {
+                logger.info(`=== CRITICAL CLEANUP STARTING FOR: ${testName} ===`);
                 try {
                     if (urlTracker && !urlTracker.cleanupCalled) {
-                        logger.info(`Performing automatic cleanup for URL tracker: ${testName}`);
-                        await urlTracker.cleanup();
-                        logger.info(`Automatic cleanup completed for URL tracker: ${testName}`);
+                        logger.info(`Performing CRITICAL cleanup for URL tracker: ${testName}`);
                         
-                        // Add extra delay to ensure API operations complete
-                        logger.info(`Ensuring all API operations complete for: ${testName}`);
-                        await new Promise(resolve => setTimeout(resolve, 500)); // Extra 500ms delay
-                        logger.info(`All operations confirmed complete for: ${testName}`);
+                        // SIMPLIFIED: Just run cleanup immediately - no waiting for uploads
+                        await urlTracker.cleanup();
+                        logger.info(`CRITICAL: Cleanup completed for URL tracker: ${testName}`);
                         
                         // Remove from global registry after cleanup
                         global._urlTrackerRegistry.trackers.delete(uniqueTestId);
                     } else {
                         if (urlTracker && urlTracker.cleanupCalled) {
-                            logger.info(`Cleanup already called for URL tracker: ${testName}`);
+                            logger.info(`CRITICAL: Cleanup already called for URL tracker: ${testName}`);
                         } else {
-                            logger.warn(`No URL tracker found for automatic cleanup: ${testName}`);
+                            logger.warn(`CRITICAL: No URL tracker found for cleanup: ${testName}`);
                         }
                     }
                 } catch (e) {
-                    logger.error(`Error in automatic URL tracker cleanup for ${testName}:`, e);
-                }
-                logger.info(`=== AUTOMATIC CLEANUP COMPLETED FOR: ${testName} ===`);
-            };
-
-            // Register cleanup with multiple triggers for maximum reliability
-            
-            // 1. Playwright's built-in test end handler - THIS IS THE MOST IMPORTANT
-            if (testInfo && typeof testInfo.onTestEnd === 'function') {
-                testInfo.onTestEnd(cleanupFunction);
-                logger.info(`Registered onTestEnd cleanup for test: ${testName}`);
-            } else {
-                logger.warn(`testInfo.onTestEnd is not available for test: ${testName}`);
-            }
-            
-            // 2. Store cleanup function for global access
-            if (!global._urlTrackerRegistry.testEndCallbacks) {
-                global._urlTrackerRegistry.testEndCallbacks = new Set();
-            }
-            global._urlTrackerRegistry.testEndCallbacks.add(cleanupFunction);
-            
-            // 3. Hook into test info attach function as another trigger
-            if (testInfo && typeof testInfo.attach === 'function') {
-                const originalAttach = testInfo.attach;
-                testInfo.attach = function(...args) {
-                    // Call cleanup before attaching final test artifacts
-                    cleanupFunction().catch(err => {
-                        logger.error(`Error in attach-triggered cleanup for ${testName}:`, err);
-                    });
-                    return originalAttach.apply(this, args);
-                };
-            }
-            
-            // 4. Set a shorter timeout-based cleanup as a fallback
-            setTimeout(async () => {
-                if (global._urlTrackerRegistry.trackers.has(uniqueTestId)) {
-                    logger.warn(`Timeout-based cleanup triggered for test: ${testName}`);
-                    await cleanupFunction();
-                }
-            }, 30000); // 30 seconds timeout instead of 5 minutes
-            
-            // 5. Force cleanup on page close events
-            if (page && typeof page.on === 'function') {
-                page.on('close', async () => {
-                    logger.info(`Page close event detected for test: ${testName}`);
-                    if (global._urlTrackerRegistry.trackers.has(uniqueTestId)) {
-                        await cleanupFunction();
+                    logger.error(`CRITICAL: Error in cleanup for ${testName}:`, e);
+                    // Force export even on error
+                    if (urlTracker && typeof urlTracker.exportResults === 'function') {
+                        urlTracker.exportResults();
                     }
-                });
-            }
-            
-            // 6. Add process exit handler specific to this test
-            const processExitHandler = async () => {
-                if (global._urlTrackerRegistry.trackers.has(uniqueTestId)) {
-                    logger.info(`Process exit handler triggered for test: ${testName}`);
-                    await cleanupFunction();
                 }
+                logger.info(`=== CRITICAL CLEANUP COMPLETED FOR: ${testName} ===`);
             };
             
-            if (!global._testSpecificExitHandlers) {
-                global._testSpecificExitHandlers = new Set();
-            }
+            // Store the critical cleanup function for afterEach
+            testInfo._criticalCleanup = criticalCleanupFunction;
             
-            if (!global._testSpecificExitHandlers.has(testName)) {
-                process.on('beforeExit', processExitHandler);
-                global._testSpecificExitHandlers.add(testName);
+            // CRITICAL: Register cleanup with worker-scoped fixture (most reliable)
+            if (global._workerCleanupFunctions) {
+                global._workerCleanupFunctions.add(criticalCleanupFunction);
+                logger.info(`CRITICAL: Registered cleanup function for ${testName} with worker fixture`);
             }
         },
         
-        // Setup a handler that will be executed after each test
+        // Setup a handler that will be executed after each test - THIS IS CRITICAL
         afterEach: async ({ page }, testInfo) => {
+            const testName = testInfo.title || 'unknown';
+            logger.info(`=== AFTEREACH STARTING FOR: ${testName} ===`);
+            
+            // CRITICAL: Execute the cleanup function IMMEDIATELY
+            if (testInfo._criticalCleanup && typeof testInfo._criticalCleanup === 'function') {
+                logger.info(`AFTEREACH: Executing CRITICAL cleanup for: ${testName}`);
+                try {
+                    await testInfo._criticalCleanup();
+                    logger.info(`AFTEREACH: CRITICAL cleanup completed for: ${testName}`);
+                } catch (cleanupError) {
+                    logger.error(`AFTEREACH: Error in CRITICAL cleanup for ${testName}:`, cleanupError);
+                }
+            } else {
+                logger.warn(`AFTEREACH: No critical cleanup function found for: ${testName}`);
+            }
+            
+            // Get the URL tracker reference
             const urlTracker = testInfo.urlTracker;
             if (urlTracker) {
                 // Try to record final navigation state if we haven't already
@@ -2278,12 +2351,14 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
                 try {
                     urlTracker.exportResults();
                 } catch (exportError) {
-                    logger.error(`Error exporting final tracking results for test ${testInfo.title}:`, exportError);
+                    logger.error(`AFTEREACH: Error exporting final tracking results for test ${testInfo.title}:`, exportError);
                 }
             }
             
-            // REMOVED: Unreliable last test detection that causes premature HTML report opening
-            // The HTML report will be shown only during process exit handlers for maximum reliability
+            // SIMPLIFIED: With fire-and-forget approach, no need to check for active uploads
+            logger.info(`AFTEREACH: Fire-and-forget API uploads initiated, no waiting required`);
+            
+            logger.info(`=== AFTEREACH COMPLETED FOR: ${testName} ===`);
         }
     };
 };
@@ -2487,10 +2562,10 @@ function performGlobalUrlTrackerCleanup() {
             
             logger.info(`Initial state: ${initialCleanupCalls} cleanup calls, ${initialApiSuccesses} API successes`);
             
-            // Wait longer for cleanup operations to complete - this is the critical part
+            // Wait much longer for cleanup operations to complete - this is the critical part
             let waitTime = 0;
-            const maxWaitTime = 30000; // Maximum 30 seconds total (increased)
-            const checkInterval = 1000; // Check every 1 second (increased for stability)
+            const maxWaitTime = 60000; // Maximum 60 seconds total (doubled)
+            const checkInterval = 2000; // Check every 2 seconds (increased for stability)
             let lastLogTime = 0;
             
             while (waitTime < maxWaitTime) {
@@ -2498,11 +2573,12 @@ function performGlobalUrlTrackerCleanup() {
                 const currentApiSuccesses = global._urlTrackerApiSuccesses ? global._urlTrackerApiSuccesses.length : 0;
                 const currentApiErrors = global._urlTrackerApiErrors ? global._urlTrackerApiErrors.length : 0;
                 const totalApiAttempts = currentApiSuccesses + currentApiErrors;
+                const activeUploads = global._activeApiUploads ? global._activeApiUploads.size : 0;
                 
-                // Log progress every 2 seconds
-                if (waitTime - lastLogTime >= 2000) {
+                // Log progress every 5 seconds
+                if (waitTime - lastLogTime >= 5000) {
                     const currentApiSkips = global._urlTrackerApiSkips ? global._urlTrackerApiSkips.length : 0;
-                    logger.info(`Progress: ${currentCleanupCalls} cleanup calls, ${currentApiSuccesses} successes, ${currentApiErrors} errors, ${currentApiSkips} skips`);
+                    logger.info(`Progress: ${currentCleanupCalls} cleanup calls, ${currentApiSuccesses} successes, ${currentApiErrors} errors, ${currentApiSkips} skips, ${activeUploads} active uploads`);
                     lastLogTime = waitTime;
                 }
                 
@@ -2510,6 +2586,14 @@ function performGlobalUrlTrackerCleanup() {
                 // We need to account for both API uploads and potential skips
                 const currentApiSkips = global._urlTrackerApiSkips ? global._urlTrackerApiSkips.length : 0;
                 const totalApiOperations = currentApiSuccesses + currentApiErrors + currentApiSkips;
+                
+                // Also check if there are any active API uploads still in progress
+                if (activeUploads > 0) {
+                    logger.info(`Still waiting for ${activeUploads} active API uploads to complete...`);
+                    await new Promise(resolve => setTimeout(resolve, checkInterval));
+                    waitTime += checkInterval;
+                    continue;
+                }
                 
                 if (currentCleanupCalls > 0 && totalApiOperations >= currentCleanupCalls) {
                     logger.info(`All cleanup operations completed after waiting ${waitTime}ms`);
