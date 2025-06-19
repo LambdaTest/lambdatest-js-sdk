@@ -1,229 +1,280 @@
-const fs = require('fs');
-const path = require('path');
-const { spawn, exec } = require('child_process');
+const fs = require("fs");
+const path = require("path");
+const { spawn, exec } = require("child_process");
 
 /**
  * Enhanced HTML Reporter for URL Tracking with Playwright-style UI and GitHub Primer design
  * Supports Appium, Playwright, and WebDriverIO frameworks
  */
 class EnhancedHtmlReporter {
-    constructor(options = {}) {
-        this.options = {
-            outputDir: options.outputDir || 'test-results',
-            reportName: options.reportName || 'url-tracking-report.html',
-            title: options.title || 'LambdaTest URL Tracking Report',
-            enableKeyboardShortcut: options.enableKeyboardShortcut !== false,
-            autoOpen: options.autoOpen || false,
-            theme: options.theme || 'light', // Default to light theme for better GitHub authenticity
-            showTimeline: options.showTimeline !== false,
-            showMetrics: options.showMetrics !== false,
-            enableSearch: options.enableSearch !== false,
-            enableFilters: options.enableFilters !== false
-        };
-        
-        this.reportPath = null;
-        this.isListening = false;
-        this.keyPressHandler = null;
+  constructor(options = {}) {
+    this.options = {
+      outputDir: options.outputDir || "test-results",
+      reportName: options.reportName || "url-tracking-report.html",
+      title: options.title || "Insights URL Tracking Report",
+      enableKeyboardShortcut: options.enableKeyboardShortcut !== false,
+      autoOpen: options.autoOpen || false,
+      theme: options.theme || "light", // Default to light theme for better GitHub authenticity
+      showTimeline: options.showTimeline !== false,
+      showMetrics: options.showMetrics !== false,
+      enableSearch: options.enableSearch !== false,
+      enableFilters: options.enableFilters !== false,
+    };
+
+    this.reportPath = null;
+    this.isListening = false;
+    this.keyPressHandler = null;
+  }
+
+  /**
+   * Generate enhanced HTML report from tracking results
+   */
+  generateReport(trackingData, framework = "unknown") {
+    try {
+      console.log(`🎯 Generating enhanced ${framework} tracking report...`);
+
+      // Ensure output directory exists
+      const outputDir = path.resolve(process.cwd(), this.options.outputDir);
+      if (!fs.existsSync(outputDir)) {
+        fs.mkdirSync(outputDir, { recursive: true });
+      }
+
+      // Parse and normalize tracking data
+      const reportData = this.parseTrackingData(trackingData, framework);
+
+      // Generate HTML content with Playwright-style UI
+      const htmlContent = this.generatePlaywrightStyleHtml(
+        reportData,
+        framework
+      );
+
+      // Write HTML file
+      const outputPath = path.join(outputDir, this.options.reportName);
+      fs.writeFileSync(outputPath, htmlContent, "utf8");
+
+      console.log(`✅ Enhanced report generated: ${outputPath}`);
+
+      // Store the report path
+      this.reportPath = outputPath;
+
+      // Setup keyboard shortcut if enabled
+      if (this.options.enableKeyboardShortcut && !this.isListening) {
+        this.setupKeyboardShortcut();
+      }
+
+      // Auto-open if enabled
+      if (this.options.autoOpen) {
+        this.openReport();
+      }
+
+      return outputPath;
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      console.error(`❌ Error generating enhanced HTML report: ${errorMsg}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Parse and normalize tracking data from different frameworks
+   */
+  parseTrackingData(data, framework) {
+    let normalized = {
+      framework,
+      sessions: [],
+      summary: {
+        totalSessions: 0,
+        totalNavigations: 0,
+        totalDuration: 0,
+        frameworks: [],
+        testFiles: [],
+        timestamp: new Date().toISOString(),
+        uniqueUrls: new Set(),
+        navigationTypes: new Map(),
+      },
+    };
+
+    try {
+      if (Array.isArray(data)) {
+        // Multiple sessions format
+        data.forEach((session) => {
+          if (
+            session.navigations ||
+            (session.metadata && session.navigations)
+          ) {
+            const normalizedSession = this.normalizeSession(session, framework);
+            normalized.sessions.push(normalizedSession);
+            this.updateSummaryMetrics(normalized.summary, normalizedSession);
+          }
+        });
+      } else if (data.navigations && Array.isArray(data.navigations)) {
+        // Single session format
+        const session = this.normalizeSession(data, framework);
+        normalized.sessions.push(session);
+        this.updateSummaryMetrics(normalized.summary, session);
+      }
+
+      // Finalize summary
+      normalized.summary.totalSessions = normalized.sessions.length;
+      normalized.summary.testFiles = [
+        ...new Set(normalized.sessions.map((s) => s.spec_file).filter(Boolean)),
+      ];
+      normalized.summary.frameworks = [framework];
+      normalized.summary.uniqueUrls = Array.from(normalized.summary.uniqueUrls);
+      normalized.summary.navigationTypes = Object.fromEntries(
+        normalized.summary.navigationTypes
+      );
+    } catch (error) {
+      console.error(`Error parsing tracking data: ${error.message}`);
     }
 
-    /**
-     * Generate enhanced HTML report from tracking results
-     */
-    generateReport(trackingData, framework = 'unknown') {
-        try {
-            console.log(`🎯 Generating enhanced ${framework} tracking report...`);
-            
-            // Ensure output directory exists
-            const outputDir = path.resolve(process.cwd(), this.options.outputDir);
-            if (!fs.existsSync(outputDir)) {
-                fs.mkdirSync(outputDir, { recursive: true });
-            }
+    return normalized;
+  }
 
-            // Parse and normalize tracking data
-            const reportData = this.parseTrackingData(trackingData, framework);
-            
-            // Generate HTML content with Playwright-style UI
-            const htmlContent = this.generatePlaywrightStyleHtml(reportData, framework);
-            
-            // Write HTML file
-            const outputPath = path.join(outputDir, this.options.reportName);
-            fs.writeFileSync(outputPath, htmlContent, 'utf8');
-            
-            console.log(`✅ Enhanced report generated: ${outputPath}`);
-            
-            // Store the report path
-            this.reportPath = outputPath;
-            
-            // Setup keyboard shortcut if enabled
-            if (this.options.enableKeyboardShortcut && !this.isListening) {
-                this.setupKeyboardShortcut();
-            }
-            
-            // Auto-open if enabled
-            if (this.options.autoOpen) {
-                this.openReport();
-            }
-            
-            return outputPath;
-        } catch (error) {
-            const errorMsg = error instanceof Error ? error.message : String(error);
-            console.error(`❌ Error generating enhanced HTML report: ${errorMsg}`);
-            throw error;
+  /**
+   * Update summary metrics from session data
+   */
+  updateSummaryMetrics(summary, session) {
+    if (session.navigations) {
+      summary.totalNavigations += session.navigations.length;
+
+      // Track unique URLs and navigation types
+      session.navigations.forEach((nav) => {
+        if (nav.current_url && nav.current_url !== "null") {
+          summary.uniqueUrls.add(nav.current_url);
         }
-    }
-
-    /**
-     * Parse and normalize tracking data from different frameworks
-     */
-    parseTrackingData(data, framework) {
-        let normalized = {
-            framework,
-            sessions: [],
-            summary: {
-                totalSessions: 0,
-                totalNavigations: 0,
-                totalDuration: 0,
-                frameworks: [],
-                testFiles: [],
-                timestamp: new Date().toISOString(),
-                uniqueUrls: new Set(),
-                navigationTypes: new Map()
-            }
-        };
-
-        try {
-            if (Array.isArray(data)) {
-                // Multiple sessions format
-                data.forEach((session) => {
-                    if (session.navigations || (session.metadata && session.navigations)) {
-                        const normalizedSession = this.normalizeSession(session, framework);
-                        normalized.sessions.push(normalizedSession);
-                        this.updateSummaryMetrics(normalized.summary, normalizedSession);
-                    }
-                });
-            } else if (data.navigations && Array.isArray(data.navigations)) {
-                // Single session format
-                const session = this.normalizeSession(data, framework);
-                normalized.sessions.push(session);
-                this.updateSummaryMetrics(normalized.summary, session);
-            }
-
-            // Finalize summary
-            normalized.summary.totalSessions = normalized.sessions.length;
-            normalized.summary.testFiles = [...new Set(normalized.sessions.map(s => s.spec_file).filter(Boolean))];
-            normalized.summary.frameworks = [framework];
-            normalized.summary.uniqueUrls = Array.from(normalized.summary.uniqueUrls);
-            normalized.summary.navigationTypes = Object.fromEntries(normalized.summary.navigationTypes);
-            
-        } catch (error) {
-            console.error(`Error parsing tracking data: ${error.message}`);
-        }
-
-        return normalized;
-    }
-
-    /**
-     * Update summary metrics from session data
-     */
-    updateSummaryMetrics(summary, session) {
-        if (session.navigations) {
-            summary.totalNavigations += session.navigations.length;
-            
-            // Track unique URLs and navigation types
-            session.navigations.forEach(nav => {
-                if (nav.current_url && nav.current_url !== 'null') {
-                    summary.uniqueUrls.add(nav.current_url);
-                }
-                if (nav.previous_url && nav.previous_url !== 'null') {
-                    summary.uniqueUrls.add(nav.previous_url);
-                }
-                
-                const navType = nav.navigation_type || nav.type || 'unknown';
-                summary.navigationTypes.set(navType, (summary.navigationTypes.get(navType) || 0) + 1);
-            });
-            
-            // Calculate duration if possible
-            if (session.navigations.length > 1) {
-                const first = new Date(session.navigations[0].timestamp);
-                const last = new Date(session.navigations[session.navigations.length - 1].timestamp);
-                session.duration = last - first;
-                summary.totalDuration += session.duration;
-            }
-        }
-    }
-
-    /**
-     * Normalize session data - Enhanced to handle nested metadata structure
-     */
-    normalizeSession(session, framework) {
-        // Extract data from nested metadata structure
-        const metadataData = session.metadata?.data || {};
-        
-        const normalized = {
-            session_id: session.session_id || metadataData.session_id || metadataData.test_id || `session_${Date.now()}`,
-            spec_file: session.spec_file || metadataData.spec_file || 'unknown.spec.js',
-            test_name: session.test_name || metadataData.name || session.metadata?.name || 'Unknown Test',
-            timestamp: session.timestamp || metadataData.create_timestamp || new Date().toISOString(),
-            framework: framework,
-            navigations: [],
-            metadata: session.metadata || {},
-            metadataData: metadataData, // Store the nested data for display
-            duration: 0,
-            status: metadataData.status_ind || metadataData.test_execution_status || 'completed',
-            // Extract additional metadata for display
-            build_id: metadataData.build_id,
-            build_name: metadataData.build_name,
-            username: metadataData.username,
-            test_type: metadataData.test_type,
-            platform: metadataData.platform,
-            browser: metadataData.browser,
-            browser_version: metadataData.browser_version,
-            resolution: metadataData.resolution,
-            geoInfo: metadataData.geoInfo,
-            // URLs for various resources
-            console_logs_url: metadataData.console_logs_url,
-            network_logs_url: metadataData.network_logs_url,
-            command_logs_url: metadataData.command_logs_url,
-            video_url: metadataData.video_url,
-            screenshot_url: metadataData.screenshot_url,
-            public_url: metadataData.public_url,
-            start_timestamp: metadataData.start_timestamp,
-            remark: metadataData.remark
-        };
-
-        // Normalize navigations
-        if (session.navigations && Array.isArray(session.navigations)) {
-            normalized.navigations = session.navigations.map(nav => this.normalizeNavigation(nav, framework));
+        if (nav.previous_url && nav.previous_url !== "null") {
+          summary.uniqueUrls.add(nav.previous_url);
         }
 
-        return normalized;
+        const navType = nav.navigation_type || nav.type || "unknown";
+        summary.navigationTypes.set(
+          navType,
+          (summary.navigationTypes.get(navType) || 0) + 1
+        );
+      });
+
+      // Calculate duration if possible
+      if (session.navigations.length > 1) {
+        const first = new Date(session.navigations[0].timestamp);
+        const last = new Date(
+          session.navigations[session.navigations.length - 1].timestamp
+        );
+        session.duration = last - first;
+        summary.totalDuration += session.duration;
+      }
+    }
+  }
+
+  /**
+   * Normalize session data - Enhanced to handle nested metadata structure
+   */
+  normalizeSession(session, framework) {
+    // Extract data from nested metadata structure
+    const metadataData = session.metadata?.data || {};
+
+    const normalized = {
+      session_id:
+        session.session_id ||
+        metadataData.session_id ||
+        metadataData.test_id ||
+        `session_${Date.now()}`,
+      spec_file:
+        session.spec_file || metadataData.spec_file || "unknown.spec.js",
+      test_name:
+        session.test_name ||
+        metadataData.name ||
+        session.metadata?.name ||
+        "Unknown Test",
+      timestamp:
+        session.timestamp ||
+        metadataData.create_timestamp ||
+        new Date().toISOString(),
+      framework: framework,
+      navigations: [],
+      metadata: session.metadata || {},
+      metadataData: metadataData, // Store the nested data for display
+      duration: 0,
+      status:
+        session.playwrightStatus ||
+        session.status ||
+        metadataData.status_ind ||
+        metadataData.test_execution_status ||
+        "unknown",
+      // Extract additional metadata for display
+      build_id: metadataData.build_id,
+      build_name: metadataData.build_name,
+      username: metadataData.username,
+      test_type: metadataData.test_type,
+      platform: metadataData.platform,
+      browser: metadataData.browser,
+      browser_version: metadataData.browser_version,
+      resolution: metadataData.resolution,
+      geoInfo: metadataData.geoInfo,
+      // URLs for various resources
+      console_logs_url: metadataData.console_logs_url,
+      network_logs_url: metadataData.network_logs_url,
+      command_logs_url: metadataData.command_logs_url,
+      video_url: metadataData.video_url,
+      screenshot_url: metadataData.screenshot_url,
+      public_url: metadataData.public_url,
+      start_timestamp: metadataData.start_timestamp,
+      remark: metadataData.remark,
+    };
+
+    // Normalize navigations
+    if (session.navigations && Array.isArray(session.navigations)) {
+      normalized.navigations = session.navigations.map((nav) =>
+        this.normalizeNavigation(nav, framework)
+      );
     }
 
-    /**
-     * Normalize navigation data
-     */
-    normalizeNavigation(navigation, framework) {
-        return {
-            previous_url: navigation.previous_url || navigation.from || navigation.previous_screen || 'null',
-            current_url: navigation.current_url || navigation.to || navigation.current_screen || 'null',
-            previous_title: navigation.previous_title || navigation.from_title || navigation.previous_page_title || null,
-            current_title: navigation.current_title || navigation.to_title || navigation.title || navigation.page_title || null,
-            timestamp: navigation.timestamp || new Date().toISOString(),
-            navigation_type: navigation.navigation_type || navigation.type || 'navigation',
-            test_name: navigation.test_name || 'Unknown Test',
-            spec_file: navigation.spec_file || 'unknown.spec.js',
-            duration: navigation.duration || 0,
-            error: navigation.error || null
-        };
-    }
+    return normalized;
+  }
 
-    /**
-     * Generate GitHub Primer UI compliant HTML
-     */
-    generatePlaywrightStyleHtml(reportData, framework) {
-        const isDark = false; // Force light theme for better compatibility
-        
-return `<!DOCTYPE html>
+  /**
+   * Normalize navigation data
+   */
+  normalizeNavigation(navigation, framework) {
+    return {
+      previous_url:
+        navigation.previous_url ||
+        navigation.from ||
+        navigation.previous_screen ||
+        "null",
+      current_url:
+        navigation.current_url ||
+        navigation.to ||
+        navigation.current_screen ||
+        "null",
+      previous_title:
+        navigation.previous_title ||
+        navigation.from_title ||
+        navigation.previous_page_title ||
+        null,
+      current_title:
+        navigation.current_title ||
+        navigation.to_title ||
+        navigation.title ||
+        navigation.page_title ||
+        null,
+      timestamp: navigation.timestamp || new Date().toISOString(),
+      navigation_type:
+        navigation.navigation_type || navigation.type || "navigation",
+      test_name: navigation.test_name || "Unknown Test",
+      spec_file: navigation.spec_file || "unknown.spec.js",
+      duration: navigation.duration || 0,
+      error: navigation.error || null,
+    };
+  }
+
+  /**
+   * Generate GitHub Primer UI compliant HTML
+   */
+  generatePlaywrightStyleHtml(reportData, framework) {
+    const isDark = false; // Force light theme for better compatibility
+
+    return `<!DOCTYPE html>
 <html lang="en" data-theme="light">
 <head>
     <meta charset="UTF-8">
@@ -237,10 +288,8 @@ return `<!DOCTYPE html>
     <div style="background-color: var(--color-canvas-subtle); border-bottom: 1px solid var(--color-border-default); padding: 16px 0;">
         <div style="max-width: 1280px; margin: 0 auto; padding: 0 16px; display: flex; align-items: center; justify-content: space-between;">
             <div style="display: flex; align-items: center; font-size: 18px; font-weight: 600; color: var(--color-fg-default);">
-                <svg style="margin-right: 8px;" width="24" height="24" viewBox="0 0 16 16" fill="currentColor">
-                    <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>
-                    </svg>
-                LambdaTest / ${this.options.title}
+                <img src="https://www.lambdatest.com/resources/images/logos/logo.svg" alt="LambdaTest Logo" style="width: 120px; height: 24px; margin-right: 4px;">
+                 / ${this.options.title}
                 </div>
             <div style="display: flex; align-items: center; gap: 16px;">
                 <button id="theme-toggle" style="background: var(--color-btn-bg); border: 1px solid var(--color-btn-border); border-radius: 6px; padding: 6px 8px; color: var(--color-fg-default); cursor: pointer; display: flex; align-items: center;" title="Toggle theme">
@@ -272,27 +321,50 @@ return `<!DOCTYPE html>
         <!-- Summary Cards -->
         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; margin-bottom: 24px;">
             <div style="background: var(--color-canvas-subtle); border: 1px solid var(--color-border-default); border-radius: 6px; padding: 16px; text-align: center;">
-                <div style="font-size: 24px; font-weight: 600; color: var(--color-fg-default); margin-bottom: 4px;">${reportData.summary.totalSessions}</div>
+                <div style="font-size: 24px; font-weight: 600; color: var(--color-fg-default); margin-bottom: 4px;">${
+                  reportData.summary.totalSessions
+                }</div>
                 <div style="font-size: 12px; color: var(--color-fg-muted); text-transform: uppercase; letter-spacing: 0.5px;">Test Sessions</div>
             </div>
             <div style="background: var(--color-canvas-subtle); border: 1px solid var(--color-border-default); border-radius: 6px; padding: 16px; text-align: center;">
-                <div style="font-size: 24px; font-weight: 600; color: var(--color-fg-default); margin-bottom: 4px;">${reportData.summary.totalNavigations}</div>
+                <div style="font-size: 24px; font-weight: 600; color: var(--color-fg-default); margin-bottom: 4px;">${
+                  reportData.summary.totalNavigations
+                }</div>
                 <div style="font-size: 12px; color: var(--color-fg-muted); text-transform: uppercase; letter-spacing: 0.5px;">Total Navigations</div>
             </div>
             <div style="background: var(--color-canvas-subtle); border: 1px solid var(--color-border-default); border-radius: 6px; padding: 16px; text-align: center;">
-                <div style="font-size: 24px; font-weight: 600; color: var(--color-fg-default); margin-bottom: 4px;">${reportData.summary.uniqueUrls.length}</div>
+                <div style="font-size: 24px; font-weight: 600; color: var(--color-fg-default); margin-bottom: 4px;">${
+                  reportData.summary.uniqueUrls.length
+                }</div>
                 <div style="font-size: 12px; color: var(--color-fg-muted); text-transform: uppercase; letter-spacing: 0.5px;">Unique URLs</div>
             </div>
             <div style="background: var(--color-canvas-subtle); border: 1px solid var(--color-border-default); border-radius: 6px; padding: 16px; text-align: center;">
-                <div style="font-size: 24px; font-weight: 600; color: var(--color-fg-default); margin-bottom: 4px;">${reportData.summary.totalSessions > 0 ? Math.round(reportData.summary.totalNavigations / reportData.summary.totalSessions) : 0}</div>
+                <div style="font-size: 24px; font-weight: 600; color: var(--color-fg-default); margin-bottom: 4px;">${
+                  reportData.summary.totalSessions > 0
+                    ? Math.round(
+                        reportData.summary.totalNavigations /
+                          reportData.summary.totalSessions
+                      )
+                    : 0
+                }</div>
                 <div style="font-size: 12px; color: var(--color-fg-muted); text-transform: uppercase; letter-spacing: 0.5px;">Avg Nav/Session</div>
             </div>
             <div style="background: var(--color-canvas-subtle); border: 1px solid var(--color-border-default); border-radius: 6px; padding: 16px; text-align: center;">
-                <div style="font-size: 24px; font-weight: 600; color: var(--color-fg-default); margin-bottom: 4px;">${reportData.summary.totalDuration > 0 ? Math.round(reportData.summary.totalDuration / reportData.summary.totalSessions / 1000) : 0}s</div>
+                <div style="font-size: 24px; font-weight: 600; color: var(--color-fg-default); margin-bottom: 4px;">${
+                  reportData.summary.totalDuration > 0
+                    ? Math.round(
+                        reportData.summary.totalDuration /
+                          reportData.summary.totalSessions /
+                          1000
+                      )
+                    : 0
+                }s</div>
                 <div style="font-size: 12px; color: var(--color-fg-muted); text-transform: uppercase; letter-spacing: 0.5px;">Avg Duration</div>
             </div>
             <div style="background: var(--color-canvas-subtle); border: 1px solid var(--color-border-default); border-radius: 6px; padding: 16px; text-align: center;">
-                <div style="font-size: 24px; font-weight: 600; color: var(--color-fg-default); margin-bottom: 4px;">${reportData.summary.testFiles.length}</div>
+                <div style="font-size: 24px; font-weight: 600; color: var(--color-fg-default); margin-bottom: 4px;">${
+                  reportData.summary.testFiles.length
+                }</div>
                 <div style="font-size: 12px; color: var(--color-fg-muted); text-transform: uppercase; letter-spacing: 0.5px;">Test Files</div>
             </div>
         </div>
@@ -309,7 +381,10 @@ return `<!DOCTYPE html>
                 ${this.generateFrameworkBadge(framework)}
                 </div>
             <div>
-                ${this.generateInlineSessionsList(reportData.sessions, framework)}
+                ${this.generateInlineSessionsList(
+                  reportData.sessions,
+                  framework
+                )}
             </div>
         </div>
     </div>
@@ -317,22 +392,22 @@ return `<!DOCTYPE html>
     ${this.getSimpleJavaScript()}
 </body>
 </html>`;
-    }
+  }
 
-    /**
-     * Get GitHub Primer CSS framework
-     */
-    getGitHubPrimerStyles() {
-        return `
+  /**
+   * Get GitHub Primer CSS framework
+   */
+  getGitHubPrimerStyles() {
+    return `
         <!-- No external CSS - using inline styles for better compatibility -->
         `;
-    }
+  }
 
-    /**
-     * Get custom styles for enhanced functionality
-     */
-    getCustomStyles() {
-        return `
+  /**
+   * Get custom styles for enhanced functionality
+   */
+  getCustomStyles() {
+    return `
     <style>
         /* CSS Custom Properties for Light and Dark Themes */
         :root[data-theme="light"] {
@@ -515,13 +590,13 @@ return `<!DOCTYPE html>
         }
     </style>
         `;
-    }
+  }
 
-    /**
-     * Generate search box component
-     */
-    generateSearchBox() {
-        return `
+  /**
+   * Generate search box component
+   */
+  generateSearchBox() {
+    return `
         <div class="position-relative">
             <input class="form-control input-contrast input-lg" type="search" placeholder="Search sessions, URLs, or navigation types..." id="search-input" aria-label="Search">
             <div class="position-absolute" style="top: 9px; right: 8px;">
@@ -531,13 +606,13 @@ return `<!DOCTYPE html>
             </div>
         </div>
         `;
-    }
+  }
 
-    /**
-     * Generate modern search box for AppHeader
-     */
-    generateModernSearchBox() {
-        return `
+  /**
+   * Generate modern search box for AppHeader
+   */
+  generateModernSearchBox() {
+    return `
         <div class="AppHeader-search">
             <div class="AppHeader-search-form">
                 <div class="form-control">
@@ -551,19 +626,23 @@ return `<!DOCTYPE html>
             </div>
         </div>
         `;
-    }
+  }
 
-    /**
-     * Generate summary panel with metrics
-     */
-    generateSummaryPanel(reportData) {
-        const { summary } = reportData;
-        const avgNavigationsPerSession = summary.totalSessions > 0 ? 
-            Math.round(summary.totalNavigations / summary.totalSessions) : 0;
-        const avgDuration = summary.totalDuration > 0 ? 
-            Math.round(summary.totalDuration / summary.totalSessions / 1000) : 0;
+  /**
+   * Generate summary panel with metrics
+   */
+  generateSummaryPanel(reportData) {
+    const { summary } = reportData;
+    const avgNavigationsPerSession =
+      summary.totalSessions > 0
+        ? Math.round(summary.totalNavigations / summary.totalSessions)
+        : 0;
+    const avgDuration =
+      summary.totalDuration > 0
+        ? Math.round(summary.totalDuration / summary.totalSessions / 1000)
+        : 0;
 
-        return `
+    return `
         <div class="d-flex flex-wrap gap-3 mb-4">
             <div class="Box flex-auto" style="min-width: 200px;">
                 <div class="Box-body text-center">
@@ -603,19 +682,23 @@ return `<!DOCTYPE html>
             </div>
         </div>
         `;
-    }
+  }
 
-    /**
-     * Generate modern summary panel with better cards
-     */
-    generateModernSummaryPanel(reportData) {
-        const { summary } = reportData;
-        const avgNavigationsPerSession = summary.totalSessions > 0 ? 
-            Math.round(summary.totalNavigations / summary.totalSessions) : 0;
-        const avgDuration = summary.totalDuration > 0 ? 
-            Math.round(summary.totalDuration / summary.totalSessions / 1000) : 0;
+  /**
+   * Generate modern summary panel with better cards
+   */
+  generateModernSummaryPanel(reportData) {
+    const { summary } = reportData;
+    const avgNavigationsPerSession =
+      summary.totalSessions > 0
+        ? Math.round(summary.totalNavigations / summary.totalSessions)
+        : 0;
+    const avgDuration =
+      summary.totalDuration > 0
+        ? Math.round(summary.totalDuration / summary.totalSessions / 1000)
+        : 0;
 
-        return `
+    return `
         <div class="BorderGrid BorderGrid--spacious mb-4">
             <div class="BorderGrid-row">
                 <div class="BorderGrid-cell">
@@ -671,13 +754,13 @@ return `<!DOCTYPE html>
             </div>
         </div>
         `;
-    }
+  }
 
-    /**
-     * Generate filters panel
-     */
-    generateFiltersPanel() {
-        return `
+  /**
+   * Generate filters panel
+   */
+  generateFiltersPanel() {
+    return `
         <div class="Box mb-4">
             <div class="Box-header">
                 <h3 class="Box-title">
@@ -715,13 +798,13 @@ return `<!DOCTYPE html>
             </div>
         </div>
         `;
-    }
+  }
 
-    /**
-     * Generate modern filters panel
-     */
-    generateModernFiltersPanel() {
-        return `
+  /**
+   * Generate modern filters panel
+   */
+  generateModernFiltersPanel() {
+    return `
         <div class="Box mb-4">
             <div class="Box-header">
                 <h3 class="Box-title">
@@ -759,14 +842,14 @@ return `<!DOCTYPE html>
             </div>
         </div>
         `;
-    }
+  }
 
-    /**
-     * Generate sessions list with enhanced formatting
-     */
-    generateSessionsList(sessions, framework) {
-        if (!sessions || sessions.length === 0) {
-            return `
+  /**
+   * Generate sessions list with enhanced formatting
+   */
+  generateSessionsList(sessions, framework) {
+    if (!sessions || sessions.length === 0) {
+      return `
             <div class="Box-body">
             <div class="blankslate">
                     <svg class="octicon octicon-pulse blankslate-icon" width="32" height="32" viewBox="0 0 16 16" fill="currentColor">
@@ -777,16 +860,22 @@ return `<!DOCTYPE html>
                 </div>
             </div>
             `;
-        }
+    }
 
-        return `
+    return `
         <div class="Box-body p-0">
-            ${sessions.map((session, index) => `
-                <div class="Box-row d-flex flex-items-center position-relative" data-session-id="${session.session_id}">
+            ${sessions
+              .map(
+                (session, index) => `
+                <div class="Box-row d-flex flex-items-center position-relative" data-session-id="${
+                  session.session_id
+                }">
                     <div class="flex-auto">
                         <div class="d-flex flex-items-start">
                             <div class="flex-auto">
-                                <a href="#" class="Link--primary text-bold f4 lh-condensed" onclick="toggleSession('${session.session_id}'); return false;">
+                                <a href="#" class="Link--primary text-bold f4 lh-condensed" onclick="toggleSession('${
+                                  session.session_id
+                                }'); return false;">
                                     ${session.test_name}
                                 </a>
                                 <div class="text-small color-fg-muted mt-1">
@@ -801,46 +890,65 @@ return `<!DOCTYPE html>
                                             <svg class="octicon octicon-link mr-1" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
                                                 <path d="m7.775 3.275 1.25-1.25a3.5 3.5 0 1 1 4.95 4.95l-2.5 2.5a3.5 3.5 0 0 1-4.95 0 .751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018 1.998 1.998 0 0 0 2.83 0l2.5-2.5a2.002 2.002 0 0 0-2.83-2.83l-1.25 1.25a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042Zm-4.69 9.64a1.998 1.998 0 0 0 2.83 0l1.25-1.25a.751.751 0 0 1 1.042.018.751.751 0 0 1 .018 1.042l-1.25 1.25a3.5 3.5 0 1 1-4.95-4.95l2.5-2.5a3.5 3.5 0 0 1 4.95 0 .751.751 0 0 1-.018 1.042.751.751 0 0 1-1.042.018 1.998 1.998 0 0 0-2.83 0l-2.5 2.5a1.998 1.998 0 0 0 0 2.83Z"/>
                                             </svg>
-                                            ${session.navigations.length} navigations
+                                            ${
+                                              session.navigations.length
+                                            } navigations
                                         </span>
                                         <span class="mr-3">
                                             <svg class="octicon octicon-clock mr-1" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
                                                 <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 0 1-.557 1.392l-2.5-1A.751.751 0 0 1 7 8.25v-3.5a.75.75 0 0 1 1.5 0Z"/>
                                             </svg>
-                                            ${new Date(session.timestamp).toLocaleString()}
+                                            ${new Date(
+                                              session.timestamp
+                                            ).toLocaleString()}
                                         </span>
-                                        ${session.duration ? `
+                                        ${
+                                          session.duration
+                                            ? `
                                         <span class="mr-3">
                                             <svg class="octicon octicon-stopwatch mr-1" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
                                                 <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 0 1-.557 1.392l-2.5-1A.751.751 0 0 1 7 8.25v-3.5a.75.75 0 0 1 1.5 0Z"/>
                                             </svg>
-                                            ${Math.round(session.duration/1000)}s
+                                            ${Math.round(
+                                              session.duration / 1000
+                                            )}s
                                         </span>
-                                        ` : ''}
-                                        ${session.username ? `
+                                        `
+                                            : ""
+                                        }
+                                        ${
+                                          session.username
+                                            ? `
                                         <span class="mr-3">
                                             <svg class="octicon octicon-person mr-1" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
                                                 <path d="M10.561 8.073a6.005 6.005 0 0 1 3.432 5.142.75.75 0 1 1-1.498.07 4.5 4.5 0 0 0-8.99 0 .75.75 0 0 1-1.498-.07 6.004 6.004 0 0 1 3.431-5.142 3.999 3.999 0 1 1 5.123 0ZM10.5 5a2.5 2.5 0 1 0-5 0 2.5 2.5 0 0 0 5 0Z"/>
                                             </svg>
                                             ${session.username}
                                         </span>
-                                        ` : ''}
-                                        ${session.build_name ? `
+                                        `
+                                            : ""
+                                        }
+                                        ${
+                                          session.build_name
+                                            ? `
                                         <span class="mr-3">
                                             <svg class="octicon octicon-tools mr-1" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
                                                 <path d="M5.433 2.304A4.494 4.494 0 0 0 3.5 6c0 .828.22 1.626.614 2.307l-2.235 2.234a1.5 1.5 0 0 0 2.122 2.122l2.234-2.235c.681.394 1.479.614 2.307.614a4.495 4.495 0 0 0 3.696-1.933l-1.05-1.05a2.999 2.999 0 0 1-2.646 1.233 2.999 2.999 0 0 1-2.122-.878A2.999 2.999 0 0 1 5.5 6c0-.944.393-1.843 1.09-2.5l.757.757a1.5 1.5 0 0 0 2.122 0l2.121-2.122a1.5 1.5 0 0 0 0-2.121L10.88.303a1.5 1.5 0 0 0-2.121 0L7.05 2.012 5.433 2.304Z"/>
                                             </svg>
                                             ${session.build_name}
                                         </span>
-                                        ` : ''}
+                                        `
+                                            : ""
+                                        }
                         </div>
                     </div>
                             </div>
                             <div class="flex-shrink-0 ml-2">
                                 <div class="d-flex flex-items-center">
                                     ${this.generateFrameworkBadge(framework)}
-                        ${this.generateStatusBadge(session.status)}
-                                    <button class="btn-octicon ml-2 session-chevron" type="button" onclick="toggleSession('${session.session_id}')">
+                                    <button class="btn-octicon ml-2 session-chevron" type="button" onclick="toggleSession('${
+                                      session.session_id
+                                    }')">
                                         <svg class="octicon octicon-chevron-down" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
                                             <path d="M12.78 5.22a.749.749 0 0 1 0 1.06l-4.25 4.25a.749.749 0 0 1-1.06 0L3.22 6.28a.749.749 0 1 1 1.06-1.06L8 8.939l3.72-3.719a.749.749 0 0 1 1.06 0Z"/>
                             </svg>
@@ -850,19 +958,23 @@ return `<!DOCTYPE html>
                         </div>
                     </div>
                 </div>
-                <div class="Details-content--hidden p-3 border-top color-border-muted" id="session-${session.session_id}">
+                <div class="Details-content--hidden p-3 border-top color-border-muted" id="session-${
+                  session.session_id
+                }">
                     ${this.generateSessionDetails(session)}
                 </div>
-            `).join('')}
+            `
+              )
+              .join("")}
             </div>
         `;
-    }
+  }
 
-    /**
-     * Generate detailed session information with modern modular architecture
-     */
-    generateSessionDetails(session) {
-        return `
+  /**
+   * Generate detailed session information with modern modular architecture
+   */
+  generateSessionDetails(session) {
+    return `
         <div class="session-details">
             <!-- Overview Cards Grid -->
             <div class="d-flex flex-wrap gap-3 mb-4">
@@ -878,15 +990,15 @@ return `<!DOCTYPE html>
             ${this.generateModernNavigationTimeline(session.navigations)}
         </div>
         `;
-    }
+  }
 
-    /**
-     * Generate modern test overview card with key information
-     */
-    generateTestOverviewCard(session) {
-        const metadata = session.metadataData || {};
-        
-        return `
+  /**
+   * Generate modern test overview card with key information
+   */
+  generateTestOverviewCard(session) {
+    const metadata = session.metadataData || {};
+
+    return `
         <div class="Box flex-auto" style="min-width: 320px;">
             <div class="Box-header d-flex flex-items-center">
                 <div class="Box-title d-flex flex-items-center">
@@ -895,17 +1007,22 @@ return `<!DOCTYPE html>
                 </svg>
                     Test Overview
                 </div>
-                ${this.generateStatusBadge(session.status)}
             </div>
             <div class="Box-body">
                 <div class="d-flex flex-column gap-3">
-                ${session.session_id ? `
+                ${
+                  session.session_id
+                    ? `
                     <div class="d-flex flex-items-center justify-content-between">
                         <span class="text-small color-fg-muted text-semibold">Session ID</span>
                         <span class="Label Label--accent text-mono f6">${session.session_id}</span>
                 </div>
-                ` : ''}
-                    ${session.build_name ? `
+                `
+                    : ""
+                }
+                    ${
+                      session.build_name
+                        ? `
                     <div class="d-flex flex-items-center justify-content-between">
                         <span class="text-small color-fg-muted text-semibold">Build</span>
                         <div class="d-flex flex-items-center">
@@ -915,14 +1032,22 @@ return `<!DOCTYPE html>
                             <span class="text-small text-semibold">${session.build_name}</span>
                         </div>
                 </div>
-                ` : ''}
-                ${session.test_type ? `
+                `
+                        : ""
+                    }
+                ${
+                  session.test_type
+                    ? `
                     <div class="d-flex flex-items-center justify-content-between">
                         <span class="text-small color-fg-muted text-semibold">Test Type</span>
                         <span class="Label Label--secondary">${session.test_type.toUpperCase()}</span>
                 </div>
-                ` : ''}
-                    ${session.username ? `
+                `
+                    : ""
+                }
+                    ${
+                      session.username
+                        ? `
                     <div class="d-flex flex-items-center justify-content-between">
                         <span class="text-small color-fg-muted text-semibold">Executed by</span>
                         <div class="d-flex flex-items-center">
@@ -932,21 +1057,27 @@ return `<!DOCTYPE html>
                             <span class="text-small text-semibold">${session.username}</span>
                 </div>
                 </div>
-                ` : ''}
+                `
+                        : ""
+                    }
                 </div>
             </div>
         </div>
         `;
-    }
+  }
 
-    /**
-     * Generate modern environment card with platform details
-     */
-    generateEnvironmentCard(session) {
-        const hasEnvInfo = session.platform || session.browser || session.resolution || session.geoInfo;
-        if (!hasEnvInfo) return '';
+  /**
+   * Generate modern environment card with platform details
+   */
+  generateEnvironmentCard(session) {
+    const hasEnvInfo =
+      session.platform ||
+      session.browser ||
+      session.resolution ||
+      session.geoInfo;
+    if (!hasEnvInfo) return "";
 
-        return `
+    return `
         <div class="Box flex-auto" style="min-width: 320px;">
             <div class="Box-header">
                 <div class="Box-title d-flex flex-items-center">
@@ -958,7 +1089,9 @@ return `<!DOCTYPE html>
             </div>
             <div class="Box-body">
                 <div class="d-flex flex-column gap-3">
-                ${session.platform ? `
+                ${
+                  session.platform
+                    ? `
                     <div class="d-flex flex-items-center justify-content-between">
                         <span class="text-small color-fg-muted text-semibold">Platform</span>
                         <div class="d-flex flex-items-center">
@@ -968,19 +1101,33 @@ return `<!DOCTYPE html>
                             <span class="Label Label--success">${session.platform.toUpperCase()}</span>
                         </div>
                 </div>
-                ` : ''}
-                ${session.browser ? `
+                `
+                    : ""
+                }
+                ${
+                  session.browser
+                    ? `
                     <div class="d-flex flex-items-center justify-content-between">
                         <span class="text-small color-fg-muted text-semibold">Browser</span>
                         <div class="d-flex flex-items-center">
                             <svg class="octicon octicon-globe mr-1" width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
                                 <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM5.78 8.75a9.64 9.64 0 0 0 1.363 4.177c.255.426.542.832.857 1.215.245-.296.551-.705.857-1.215A9.64 9.64 0 0 0 10.22 8.75Zm4.44-1.5a9.64 9.64 0 0 0-1.363-4.177c-.307-.51-.612-.919-.857-1.215a9.927 9.927 0 0 0-.857 1.215A9.64 9.64 0 0 0 5.78 7.25Zm-5.944 1.5H1.543a6.507 6.507 0 0 0 4.666 5.5c-.123-.181-.24-.365-.352-.552-.715-1.192-1.437-2.874-1.581-4.948Zm-2.733-1.5h2.733c.144-2.074.866-3.756 1.58-4.948.12-.197.237-.381.353-.552a6.507 6.507 0 0 0-4.666 5.5Zm10.181 1.5c-.144 2.074-.866 3.756-1.58 4.948-.12.197-.237.381-.353.552a6.507 6.507 0 0 0 4.666-5.5Zm2.733-1.5a6.507 6.507 0 0 0-4.666-5.5c.123.181.24.365.353.552.714 1.192 1.436 2.874 1.58 4.948Z"/>
                             </svg>
-                            <span class="Label Label--accent">${session.browser}${session.browser_version ? ` ${session.browser_version}` : ''}</span>
+                            <span class="Label Label--accent">${
+                              session.browser
+                            }${
+                        session.browser_version
+                          ? ` ${session.browser_version}`
+                          : ""
+                      }</span>
                         </div>
                 </div>
-                ` : ''}
-                ${session.resolution ? `
+                `
+                    : ""
+                }
+                ${
+                  session.resolution
+                    ? `
                     <div class="d-flex flex-items-center justify-content-between">
                         <span class="text-small color-fg-muted text-semibold">Resolution</span>
                         <div class="d-flex flex-items-center">
@@ -990,8 +1137,12 @@ return `<!DOCTYPE html>
                             <span class="text-mono text-small text-semibold">${session.resolution}</span>
                         </div>
                 </div>
-                ` : ''}
-                ${session.geoInfo ? `
+                `
+                    : ""
+                }
+                ${
+                  session.geoInfo
+                    ? `
                     <div class="d-flex flex-items-center justify-content-between">
                         <span class="text-small color-fg-muted text-semibold">Location</span>
                         <div class="d-flex flex-items-center">
@@ -1001,18 +1152,20 @@ return `<!DOCTYPE html>
                             <span class="text-small text-semibold">${session.geoInfo.regionName}, ${session.geoInfo.country}</span>
                         </div>
                 </div>
-                ` : ''}
+                `
+                    : ""
+                }
                 </div>
             </div>
         </div>
         `;
-    }
+  }
 
-    /**
-     * Generate timing and duration card
-     */
-    generateTimingCard(session) {
-        return `
+  /**
+   * Generate timing and duration card
+   */
+  generateTimingCard(session) {
+    return `
         <div class="Box flex-auto" style="min-width: 280px;">
             <div class="Box-header">
                 <div class="Box-title d-flex flex-items-center">
@@ -1024,58 +1177,89 @@ return `<!DOCTYPE html>
             </div>
             <div class="Box-body">
                 <div class="d-flex flex-column gap-3">
-                    ${session.start_timestamp ? `
+                    ${
+                      session.start_timestamp
+                        ? `
                     <div class="d-flex flex-items-center justify-content-between">
                         <span class="text-small color-fg-muted text-semibold">Started</span>
                         <div class="d-flex flex-items-center">
                             <svg class="octicon octicon-calendar mr-1" width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
                                 <path d="M4.75 0a.75.75 0 0 1 .75.75V2h5V.75a.75.75 0 0 1 1.5 0V2h1.25c.966 0 1.75.784 1.75 1.75v11.5A1.75 1.75 0 0 1 13.25 17H2.75A1.75 1.75 0 0 1 1 15.25V3.75C1 2.784 1.784 2 2.75 2H4V.75A.75.75 0 0 1 4.75 0Zm0 3.5h8.5a.25.25 0 0 1 .25.25V6h-11V3.75a.25.25 0 0 1 .25-.25H2.5v.75a.75.75 0 0 0 1.5 0V3.5Zm-2 4.25h11v7.5a.25.25 0 0 1-.25.25H2.75a.25.25 0 0 1-.25-.25v-7.5Z"/>
                             </svg>
-                            <span class="text-mono text-small">${new Date(session.start_timestamp).toLocaleString()}</span>
+                            <span class="text-mono text-small">${new Date(
+                              session.start_timestamp
+                            ).toLocaleString()}</span>
                         </div>
                     </div>
-                    ` : ''}
-                    ${session.duration ? `
+                    `
+                        : ""
+                    }
+                    ${
+                      session.duration
+                        ? `
                     <div class="d-flex flex-items-center justify-content-between">
                         <span class="text-small color-fg-muted text-semibold">Duration</span>
                         <div class="d-flex flex-items-center">
                             <svg class="octicon octicon-stopwatch mr-1" width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
                                 <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 0 1-.557 1.392l-2.5-1A.751.751 0 0 1 7 8.25v-3.5a.75.75 0 0 1 1.5 0Z"/>
                             </svg>
-                            <span class="Label Label--attention">${Math.round(session.duration/1000)}s</span>
+                            <span class="Label Label--attention">${Math.round(
+                              session.duration / 1000
+                            )}s</span>
                         </div>
                     </div>
-                    ` : ''}
+                    `
+                        : ""
+                    }
                     <div class="d-flex flex-items-center justify-content-between">
                         <span class="text-small color-fg-muted text-semibold">Navigation Count</span>
                         <div class="d-flex flex-items-center">
                             <svg class="octicon octicon-iterations mr-1" width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
                                 <path d="M1.5 1.75V13.5h13.75a.75.75 0 0 1 0 1.5H.75a.75.75 0 0 1-.75-.75V1.75a.75.75 0 0 1 1.5 0Zm14.28 2.53-5.25 5.25a.75.75 0 0 1-1.06 0L7 7.06 4.28 9.78a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042l3.25-3.25a.75.75 0 0 1 1.06 0L10 7.94l4.72-4.72a.751.751 0 0 1 1.042.018.751.751 0 0 1 .018 1.042Z"/>
                             </svg>
-                            <span class="Label Label--primary">${session.navigations.length}</span>
+                            <span class="Label Label--primary">${
+                              session.navigations.length
+                            }</span>
                         </div>
                     </div>
-                    ${session.navigations.length > 0 ? `
+                    ${
+                      session.navigations.length > 0
+                        ? `
                     <div class="d-flex flex-items-center justify-content-between">
                         <span class="text-small color-fg-muted text-semibold">Avg per Navigation</span>
-                        <span class="text-mono text-small">${session.duration ? Math.round((session.duration/1000)/session.navigations.length) + 's' : 'N/A'}</span>
+                        <span class="text-mono text-small">${
+                          session.duration
+                            ? Math.round(
+                                session.duration /
+                                  1000 /
+                                  session.navigations.length
+                              ) + "s"
+                            : "N/A"
+                        }</span>
                     </div>
-                    ` : ''}
+                    `
+                        : ""
+                    }
                 </div>
             </div>
         </div>
         `;
-    }
+  }
 
-    /**
-     * Generate modern resource actions bar
-     */
-    generateResourceActionsBar(session) {
-        const hasLinks = session.video_url || session.screenshot_url || session.console_logs_url || 
-                         session.network_logs_url || session.command_logs_url || session.public_url;
-        if (!hasLinks) return '';
+  /**
+   * Generate modern resource actions bar
+   */
+  generateResourceActionsBar(session) {
+    const hasLinks =
+      session.video_url ||
+      session.screenshot_url ||
+      session.console_logs_url ||
+      session.network_logs_url ||
+      session.command_logs_url ||
+      session.public_url;
+    if (!hasLinks) return "";
 
-        return `
+    return `
         <div class="Box mb-4">
             <div class="Box-header d-flex flex-items-center">
                 <div class="Box-title d-flex flex-items-center">
@@ -1084,92 +1268,118 @@ return `<!DOCTYPE html>
                 </svg>
                     Resources & Actions
                 </div>
-                <span class="Label Label--secondary ml-2">${this.countResourceLinks(session)} resources</span>
+                <span class="Label Label--secondary ml-2">${this.countResourceLinks(
+                  session
+                )} resources</span>
             </div>
             <div class="Box-body">
                 <div class="d-flex flex-wrap gap-2">
-                ${session.public_url ? `
+                ${
+                  session.public_url
+                    ? `
                     <a href="${session.public_url}" target="_blank" class="btn btn-primary">
                         <svg class="octicon mr-1" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
                             <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>
                     </svg>
                         View Public Report
                 </a>
-                ` : ''}
+                `
+                    : ""
+                }
                     
                     <!-- Media Resources -->
                     <div class="d-flex gap-2">
-                ${session.video_url ? `
+                ${
+                  session.video_url
+                    ? `
                         <a href="${session.video_url}" target="_blank" class="btn btn-outline">
                             <svg class="octicon mr-1" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
                         <path d="m11.596 8.697-6.363 3.692c-.54.313-1.233-.066-1.233-.697V4.308c0-.63.692-1.01 1.233-.696l6.363 3.692a.802.802 0 0 1 0 1.393z"/>
                     </svg>
                     Video Recording
                 </a>
-                ` : ''}
-                ${session.screenshot_url ? `
+                `
+                    : ""
+                }
+                ${
+                  session.screenshot_url
+                    ? `
                         <a href="${session.screenshot_url}" target="_blank" class="btn btn-outline">
                             <svg class="octicon mr-1" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
                                 <path d="M0 10.5A1.5 1.5 0 0 0 1.5 12h13a1.5 1.5 0 0 0 1.5-1.5v-7A1.5 1.5 0 0 0 14.5 2h-13A1.5 1.5 0 0 0 0 3.5v7ZM1.5 3.5a.5.5 0 0 1 .5-.5h12a.5.5 0 0 1 .5.5v7a.5.5 0 0 1-.5.5h-12a.5.5 0 0 1-.5-.5v-7ZM13 5.25a.25.25 0 1 1-.5 0 .25.25 0 0 1 .5 0ZM4.5 7a1.5 1.5 0 1 1 3 0 1.5 1.5 0 0 1-3 0Zm4.5 4.5L6 8l-1.5 2H12l-3-2.5Z"/>
                     </svg>
                     Screenshots
                 </a>
-                ` : ''}
+                `
+                    : ""
+                }
                     </div>
                     
                     <!-- Log Resources -->
                     <div class="d-flex gap-2">
-                ${session.console_logs_url ? `
+                ${
+                  session.console_logs_url
+                    ? `
                         <a href="${session.console_logs_url}" target="_blank" class="btn btn-outline">
                             <svg class="octicon mr-1" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
                         <path d="M0 2.75C0 1.784.784 1 1.75 1h12.5c.966 0 1.75.784 1.75 1.75v10.5A1.75 1.75 0 0 1 14.25 15H1.75A1.75 1.75 0 0 1 0 13.25V2.75zm1.75-.25a.25.25 0 0 0-.25.25v10.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25V2.75a.25.25 0 0 0-.25-.25H1.75zM7.25 8a.75.75 0 0 1-.22.53l-2.25 2.25a.75.75 0 0 1-1.06-1.06L5.44 8 3.72 6.28a.75.75 0 0 1 1.06-1.06l2.25 2.25c.141.14.22.331.22.53zm1.5 1.5a.75.75 0 0 1 0-1.5h3a.75.75 0 0 1 0 1.5h-3z"/>
                     </svg>
                             Console
                 </a>
-                ` : ''}
-                ${session.network_logs_url ? `
+                `
+                    : ""
+                }
+                ${
+                  session.network_logs_url
+                    ? `
                         <a href="${session.network_logs_url}" target="_blank" class="btn btn-outline">
                             <svg class="octicon mr-1" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
                         <path d="M2.5 3.5c0-.825.675-1.5 1.5-1.5h1c.825 0 1.5.675 1.5 1.5V5h1V3.5c0-.825.675-1.5 1.5-1.5h1c.825 0 1.5.675 1.5 1.5V12c0 1.38-1.12 2.5-2.5 2.5h-9C1.12 14.5 0 13.38 0 12V3.5c0-.825.675-1.5 1.5-1.5h1zM1.5 12c0 .55.45 1 1 1h9c.55 0 1-.45 1-1V6.5H1.5V12z"/>
                     </svg>
                             Network
                 </a>
-                ` : ''}
-                ${session.command_logs_url ? `
+                `
+                    : ""
+                }
+                ${
+                  session.command_logs_url
+                    ? `
                         <a href="${session.command_logs_url}" target="_blank" class="btn btn-outline">
                             <svg class="octicon mr-1" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
                         <path d="M7.25 2.75a.75.75 0 0 0-1.5 0v8.5a.75.75 0 0 0 1.5 0v-3.5h3.25a.75.75 0 0 0 0-1.5H7.25v-3.5z"/>
                     </svg>
                             Commands
                 </a>
-                ` : ''}
+                `
+                    : ""
+                }
                     </div>
                 </div>
             </div>
         </div>
         `;
-    }
+  }
 
-    /**
-     * Count available resource links for a session
-     */
-    countResourceLinks(session) {
-        let count = 0;
-        if (session.public_url) count++;
-        if (session.video_url) count++;
-        if (session.screenshot_url) count++;
-        if (session.console_logs_url) count++;
-        if (session.network_logs_url) count++;
-        if (session.command_logs_url) count++;
-        return count;
-    }
+  /**
+   * Count available resource links for a session
+   */
+  countResourceLinks(session) {
+    let count = 0;
+    if (session.public_url) count++;
+    if (session.video_url) count++;
+    if (session.screenshot_url) count++;
+    if (session.console_logs_url) count++;
+    if (session.network_logs_url) count++;
+    if (session.command_logs_url) count++;
+    return count;
+  }
 
-    /**
-     * Generate modern navigation timeline with enhanced UX
-     */
-    generateModernNavigationTimeline(navigations) {
-        if (!navigations || navigations.length === 0) {
-            return `
+  /**
+   * Generate modern navigation timeline with enhanced UX
+   */
+  generateModernNavigationTimeline(navigations) {
+    if (!navigations || navigations.length === 0) {
+      return `
             <div class="Box">
                 <div class="Box-header">
                     <div class="Box-title d-flex flex-items-center">
@@ -1190,9 +1400,9 @@ return `<!DOCTYPE html>
                 </div>
             </div>
             `;
-        }
+    }
 
-        return `
+    return `
         <div class="Box">
             <div class="Box-header d-flex flex-items-center justify-content-between">
                 <div class="Box-title d-flex flex-items-center">
@@ -1202,25 +1412,45 @@ return `<!DOCTYPE html>
                     Navigation Timeline
                 </div>
                 <div class="d-flex flex-items-center gap-2">
-                    <span class="Label Label--primary">${navigations.length} steps</span>
-                    <span class="text-small color-fg-muted">${this.calculateNavigationDuration(navigations)}</span>
+                    <span class="Label Label--primary">${
+                      navigations.length
+                    } steps</span>
+                    <span class="text-small color-fg-muted">${this.calculateNavigationDuration(
+                      navigations
+                    )}</span>
                 </div>
             </div>
             <div class="Box-body p-0">
                 <div class="timeline-container">
-                ${navigations.map((nav, index) => `
-                        <div class="TimelineItem${index === navigations.length - 1 ? ' TimelineItem--last' : ''}">
+                ${navigations
+                  .map(
+                    (nav, index) => `
+                        <div class="TimelineItem${
+                          index === navigations.length - 1
+                            ? " TimelineItem--last"
+                            : ""
+                        }">
                             <div class="TimelineItem-badge">
-                                <div class="Timeline-Badge ${this.getNavigationBadgeClass(nav.navigation_type)}">
+                                <div class="Timeline-Badge ${this.getNavigationBadgeClass(
+                                  nav.navigation_type
+                                )}">
                                     ${index + 1}
                                 </div>
                             </div>
                             <div class="TimelineItem-body">
                                 <div class="TimelineItem-header">
                                     <div class="d-flex flex-items-center gap-2 flex-wrap">
-                                        <span class="Label ${this.getNavigationTypeClass(nav.navigation_type)}">${nav.navigation_type}</span>
-                                        <span class="text-small color-fg-muted">${this.formatTimestamp(nav.timestamp)}</span>
-                                        ${nav.duration ? `<span class="Label Label--attention text-mono">${nav.duration}ms</span>` : ''}
+                                        <span class="Label ${this.getNavigationTypeClass(
+                                          nav.navigation_type
+                                        )}">${nav.navigation_type}</span>
+                                        <span class="text-small color-fg-muted">${this.formatTimestamp(
+                                          nav.timestamp
+                                        )}</span>
+                                        ${
+                                          nav.duration
+                                            ? `<span class="Label Label--attention text-mono">${nav.duration}ms</span>`
+                                            : ""
+                                        }
                                     </div>
                                 </div>
                                 <div class="TimelineItem-content mt-2">
@@ -1228,21 +1458,25 @@ return `<!DOCTYPE html>
                                 </div>
                             </div>
                         </div>
-                    `).join('')}
+                    `
+                  )
+                  .join("")}
                 </div>
             </div>
         </div>
         `;
-    }
+  }
 
-    /**
-     * Generate navigation flow visualization
-     */
-    generateNavigationFlow(nav, index) {
-        const navId = `nav-${index}`;
-        return `
+  /**
+   * Generate navigation flow visualization
+   */
+  generateNavigationFlow(nav, index) {
+    const navId = `nav-${index}`;
+    return `
         <div class="nav-flow">
-                            ${nav.previous_url !== 'null' ? `
+                            ${
+                              nav.previous_url !== "null"
+                                ? `
             <div class="nav-step">
                 <div class="nav-step-label">
                     <svg class="octicon octicon-arrow-left mr-1" width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
@@ -1257,7 +1491,13 @@ return `<!DOCTYPE html>
                         </svg>
                         <span class="title-text">Loading...</span>
                     </div>
-                    <a href="${nav.previous_url}" target="_blank" class="nav-url-link" title="${nav.previous_url}" data-url="${nav.previous_url}" data-title-target="${navId}-prev-title">
+                    <a href="${
+                      nav.previous_url
+                    }" target="_blank" class="nav-url-link" title="${
+                                    nav.previous_url
+                                  }" data-url="${
+                                    nav.previous_url
+                                  }" data-title-target="${navId}-prev-title">
                         <svg class="octicon octicon-link-external mr-1" width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
                                             <path d="M3.75 2h3.5a.75.75 0 0 1 0 1.5h-3.5a.25.25 0 0 0-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25v-3.5a.75.75 0 0 1 1.5 0v3.5A1.75 1.75 0 0 1 12.25 14h-8.5A1.75 1.75 0 0 1 2 12.25v-8.5C2 2.784 2.784 2 3.75 2Zm6.854-1h4.146a.25.25 0 0 1 .25.25v4.146a.25.25 0 0 1-.427.177L13.03 4.03 9.28 7.78a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042l3.75-3.75-1.543-1.543A.25.25 0 0 1 10.604 1Z"/>
                                         </svg>
@@ -1270,7 +1510,9 @@ return `<!DOCTYPE html>
                     <path d="M8.22 2.97a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L11.19 9H3.75a.75.75 0 0 1 0-1.5h7.44L8.22 4.03a.75.75 0 0 1 0-1.06Z"/>
                 </svg>
                                 </div>
-                            ` : ''}
+                            `
+                                : ""
+                            }
             <div class="nav-step">
                 <div class="nav-step-label">
                     <svg class="octicon octicon-arrow-right mr-1" width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
@@ -1285,7 +1527,11 @@ return `<!DOCTYPE html>
                         </svg>
                         <span class="title-text">Loading...</span>
                     </div>
-                    <a href="${nav.current_url}" target="_blank" class="nav-url-link" title="${nav.current_url}" data-url="${nav.current_url}" data-title-target="${navId}-curr-title">
+                    <a href="${
+                      nav.current_url
+                    }" target="_blank" class="nav-url-link" title="${
+      nav.current_url
+    }" data-url="${nav.current_url}" data-title-target="${navId}-curr-title">
                         <svg class="octicon octicon-link-external mr-1" width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
                                         <path d="M3.75 2h3.5a.75.75 0 0 1 0 1.5h-3.5a.25.25 0 0 0-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25v-3.5a.75.75 0 0 1 1.5 0v3.5A1.75 1.75 0 0 1 12.25 14h-8.5A1.75 1.75 0 0 1 2 12.25v-8.5C2 2.784 2.784 2 3.75 2Zm6.854-1h4.146a.25.25 0 0 1 .25.25v4.146a.25.25 0 0 1-.427.177L13.03 4.03 9.28 7.78a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042l3.75-3.75-1.543-1.543A.25.25 0 0 1 10.604 1Z"/>
                                     </svg>
@@ -1295,236 +1541,248 @@ return `<!DOCTYPE html>
             </div>
         </div>
         `;
-    }
+  }
 
-    /**
-     * Get navigation badge class based on type
-     */
-    getNavigationBadgeClass(type) {
-        const classMap = {
-            'navigation': 'Timeline-Badge--success',
-            'goto': 'Timeline-Badge--primary',
-            'back': 'Timeline-Badge--attention',
-            'forward': 'Timeline-Badge--done',
-            'refresh': 'Timeline-Badge--severe'
-        };
-        return classMap[type] || 'Timeline-Badge--secondary';
-    }
+  /**
+   * Get navigation badge class based on type
+   */
+  getNavigationBadgeClass(type) {
+    const classMap = {
+      navigation: "Timeline-Badge--success",
+      goto: "Timeline-Badge--primary",
+      back: "Timeline-Badge--attention",
+      forward: "Timeline-Badge--done",
+      refresh: "Timeline-Badge--severe",
+    };
+    return classMap[type] || "Timeline-Badge--secondary";
+  }
 
-    /**
-     * Get navigation type label class
-     */
-    getNavigationTypeClass(type) {
-        const classMap = {
-            'navigation': 'Label--success',
-            'goto': 'Label--primary',
-            'back': 'Label--attention',
-            'forward': 'Label--done',
-            'refresh': 'Label--severe'
-        };
-        return classMap[type] || 'Label--secondary';
-    }
+  /**
+   * Get navigation type label class
+   */
+  getNavigationTypeClass(type) {
+    const classMap = {
+      navigation: "Label--success",
+      goto: "Label--primary",
+      back: "Label--attention",
+      forward: "Label--done",
+      refresh: "Label--severe",
+    };
+    return classMap[type] || "Label--secondary";
+  }
 
-    /**
-     * Format URL for display with smart truncation
-     */
-    formatUrl(url) {
-        if (!url || url === 'null') return 'null';
-        if (url.length <= 50) return url;
-        
-        try {
-            const urlObj = new URL(url);
-            const domain = urlObj.hostname;
-            let path = urlObj.pathname + urlObj.search;
-            
-            if (path.length > 30) {
-                path = path.substring(0, 27) + '...';
-            }
-            
-            return domain + path;
-        } catch {
-            // If URL parsing fails, use simple truncation
-            return url.substring(0, 47) + '...';
-        }
-    }
+  /**
+   * Format URL for display with smart truncation
+   */
+  formatUrl(url) {
+    if (!url || url === "null") return "null";
+    if (url.length <= 50) return url;
 
-    /**
-     * Escape HTML characters in strings
-     */
-    escapeHtml(unsafe) {
-        if (!unsafe) return '';
-        return unsafe
-            .replace(/&/g, "&amp;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;")
-            .replace(/"/g, "&quot;")
-            .replace(/'/g, "&#039;");
-    }
+    try {
+      const urlObj = new URL(url);
+      const domain = urlObj.hostname;
+      let path = urlObj.pathname + urlObj.search;
 
-    /**
-     * Calculate total navigation duration
-     */
-    calculateNavigationDuration(navigations) {
-        if (!navigations || navigations.length < 2) return '';
-        
-        const first = new Date(navigations[0].timestamp);
-        const last = new Date(navigations[navigations.length - 1].timestamp);
-        const duration = last - first;
-        
-        if (duration < 1000) return `${duration}ms`;
-        if (duration < 60000) return `${Math.round(duration/1000)}s`;
-        return `${Math.round(duration/60000)}m ${Math.round((duration%60000)/1000)}s`;
-    }
+      if (path.length > 30) {
+        path = path.substring(0, 27) + "...";
+      }
 
-    /**
-     * Generate status badge for session
-     */
-    generateStatusBadge(status) {
-        const statusMap = {
-            'completed': { class: 'success', icon: '✓' },
-            'running': { class: 'attention', icon: '⟳' },
-            'failed': { class: 'danger', icon: '✗' },
-            'timeout': { class: 'severe', icon: '⏱' }
-        };
-        
-        const statusInfo = statusMap[status] || { class: 'secondary', icon: '?' };
-        return `<span class="Label Label--${statusInfo.class}">${statusInfo.icon} ${status}</span>`;
+      return domain + path;
+    } catch {
+      // If URL parsing fails, use simple truncation
+      return url.substring(0, 47) + "...";
     }
+  }
 
-    /**
-     * Generate framework badge with appropriate logo
-     */
-    generateFrameworkBadge(framework) {
-        const frameworkInfo = this.getFrameworkInfo(framework);
-        
-        // For frameworks with image URLs, display only the image
-        if (frameworkInfo.logoUrl) {
-            return `
+  /**
+   * Escape HTML characters in strings
+   */
+  escapeHtml(unsafe) {
+    if (!unsafe) return "";
+    return unsafe
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+
+  /**
+   * Calculate total navigation duration
+   */
+  calculateNavigationDuration(navigations) {
+    if (!navigations || navigations.length < 2) return "";
+
+    const first = new Date(navigations[0].timestamp);
+    const last = new Date(navigations[navigations.length - 1].timestamp);
+    const duration = last - first;
+
+    if (duration < 1000) return `${duration}ms`;
+    if (duration < 60000) return `${Math.round(duration / 1000)}s`;
+    return `${Math.round(duration / 60000)}m ${Math.round(
+      (duration % 60000) / 1000
+    )}s`;
+  }
+
+  /**
+   * Generate status badge for session
+   */
+  generateStatusBadge(status) {
+    const statusMap = {
+      // Playwright statuses
+      passed: { class: "success", icon: "✓", displayName: "Passed" },
+      failed: { class: "danger", icon: "✗", displayName: "Failed" },
+      skipped: { class: "secondary", icon: "⊘", displayName: "Skipped" },
+      timedOut: { class: "severe", icon: "⏱", displayName: "Timed Out" },
+      interrupted: { class: "severe", icon: "⊗", displayName: "Interrupted" },
+      // Legacy statuses for backwards compatibility
+      completed: { class: "success", icon: "✓", displayName: "Completed" },
+      running: { class: "attention", icon: "⟳", displayName: "Running" },
+      timeout: { class: "severe", icon: "⏱", displayName: "Timeout" },
+      // Default for unknown status
+      unknown: { class: "secondary", icon: "?", displayName: "Unknown" },
+    };
+
+    const statusInfo = statusMap[status] || statusMap["unknown"];
+    return `<span class="Label Label--${statusInfo.class}">${statusInfo.icon} ${statusInfo.displayName}</span>`;
+  }
+
+  /**
+   * Generate framework badge with appropriate logo
+   */
+  generateFrameworkBadge(framework) {
+    const frameworkInfo = this.getFrameworkInfo(framework);
+
+    // For frameworks with image URLs, display only the image
+    if (frameworkInfo.logoUrl) {
+      return `
             <img src="${frameworkInfo.logoUrl}" 
                  alt="${frameworkInfo.displayName}" 
                  title="${frameworkInfo.displayName}"
                  style="width: 120px; height: 24px; object-fit: contain; vertical-align: middle;"
                  onerror="this.style.display='none';" />
             `;
-        }
-        
-        // For frameworks with SVG logos, use the old badge style
-        return `
+    }
+
+    // For frameworks with SVG logos, use the old badge style
+    return `
         <span style="background: ${frameworkInfo.bgColor}; border: 1px solid ${frameworkInfo.borderColor}; border-radius: 12px; padding: 4px 8px; font-size: 12px; font-weight: 500; color: ${frameworkInfo.textColor}; display: inline-flex; align-items: center; gap: 4px;">
             ${frameworkInfo.logo}
             ${frameworkInfo.displayName}
         </span>
         `;
-    }
+  }
 
-    /**
-     * Get framework information including logo and styling
-     */
-    getFrameworkInfo(framework) {
-        const frameworkMap = {
-                         'playwright': {
-                 displayName: 'Playwright',
-                 logoUrl: 'https://latestlogo.com/wp-content/uploads/2024/02/playwright-logo.png'
-             },
-            'appium': {
-                displayName: 'Appium',
-                bgColor: '#7B68EE',
-                borderColor: '#7B68EE',
-                textColor: '#ffffff',
-                logo: `
+  /**
+   * Get framework information including logo and styling
+   */
+  getFrameworkInfo(framework) {
+    const frameworkMap = {
+      playwright: {
+        displayName: "Playwright",
+        logoUrl:
+          "https://latestlogo.com/wp-content/uploads/2024/02/playwright-logo.png",
+      },
+      appium: {
+        displayName: "Appium",
+        bgColor: "#7B68EE",
+        borderColor: "#7B68EE",
+        textColor: "#ffffff",
+        logo: `
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                     <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-2-8c0 1.1.9 2 2 2s2-.9 2-2-.9-2-2-2-2 .9-2 2z"/>
                 </svg>
-                `
-            },
-            'cypress': {
-                displayName: 'Cypress',
-                bgColor: '#17202C',
-                borderColor: '#17202C',
-                textColor: '#ffffff',
-                logo: `
+                `,
+      },
+      cypress: {
+        displayName: "Cypress",
+        bgColor: "#17202C",
+        borderColor: "#17202C",
+        textColor: "#ffffff",
+        logo: `
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                     <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z"/>
                 </svg>
-                `
-            },
-            'selenium': {
-                displayName: 'Selenium',
-                bgColor: '#43B02A',
-                borderColor: '#43B02A',
-                textColor: '#ffffff',
-                logo: `
+                `,
+      },
+      selenium: {
+        displayName: "Selenium",
+        bgColor: "#43B02A",
+        borderColor: "#43B02A",
+        textColor: "#ffffff",
+        logo: `
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                     <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-5-9l1.41 1.41L11 9.83V17h2V9.83l2.59 2.58L17 11l-5-5-5 5z"/>
                 </svg>
-                `
-            },
-                         'webdriverio': {
-                 displayName: 'WebDriverIO',
-                 logoUrl: 'https://res.cloudinary.com/practicaldev/image/fetch/s--vkm_jIDa--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_800/https://i.imgur.com/2uWTVHO.png'
-             },
-            'testcafe': {
-                displayName: 'TestCafe',
-                bgColor: '#36B6D4',
-                borderColor: '#36B6D4',
-                textColor: '#ffffff',
-                logo: `
+                `,
+      },
+      webdriverio: {
+        displayName: "WebDriverIO",
+        logoUrl:
+          "https://res.cloudinary.com/practicaldev/image/fetch/s--vkm_jIDa--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_800/https://i.imgur.com/2uWTVHO.png",
+      },
+      testcafe: {
+        displayName: "TestCafe",
+        bgColor: "#36B6D4",
+        borderColor: "#36B6D4",
+        textColor: "#ffffff",
+        logo: `
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                     <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z"/>
                 </svg>
-                `
-            },
-            'puppeteer': {
-                displayName: 'Puppeteer',
-                bgColor: '#40B5A4',
-                borderColor: '#40B5A4',
-                textColor: '#ffffff',
-                logo: `
+                `,
+      },
+      puppeteer: {
+        displayName: "Puppeteer",
+        bgColor: "#40B5A4",
+        borderColor: "#40B5A4",
+        textColor: "#ffffff",
+        logo: `
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                     <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z"/>
                 </svg>
-                `
-            }
-        };
+                `,
+      },
+    };
 
-        // Return default styling for unknown frameworks
-        return frameworkMap[framework.toLowerCase()] || {
-            displayName: framework.charAt(0).toUpperCase() + framework.slice(1),
-            bgColor: 'var(--color-neutral-muted)',
-            borderColor: 'var(--color-border-default)',
-            textColor: 'var(--color-fg-muted)',
-            logo: `
+    // Return default styling for unknown frameworks
+    return (
+      frameworkMap[framework.toLowerCase()] || {
+        displayName: framework.charAt(0).toUpperCase() + framework.slice(1),
+        bgColor: "var(--color-neutral-muted)",
+        borderColor: "var(--color-border-default)",
+        textColor: "var(--color-fg-muted)",
+        logo: `
             <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z"/>
             </svg>
-            `
-        };
-    }
+            `,
+      }
+    );
+  }
 
+  /**
+   * Truncate URL for display
+   */
+  truncateUrl(url) {
+    if (!url || url === "null") return "null";
+    if (url.length <= 40) return url;
+    return url.substring(0, 37) + "...";
+  }
 
+  /**
+   * Format timestamp for display
+   */
+  formatTimestamp(timestamp) {
+    const date = new Date(timestamp);
+    return date.toLocaleTimeString();
+  }
 
-    /**
-     * Truncate URL for display
-     */
-    truncateUrl(url) {
-        if (!url || url === 'null') return 'null';
-        if (url.length <= 40) return url;
-        return url.substring(0, 37) + '...';
-    }
-
-    /**
-     * Format timestamp for display
-     */
-    formatTimestamp(timestamp) {
-        const date = new Date(timestamp);
-        return date.toLocaleTimeString();
-    }
-
-    /**
-     * Generate enhanced JavaScript for interactivity
-     */
-    getEnhancedJavaScript() {
-        return `
+  /**
+   * Generate enhanced JavaScript for interactivity
+   */
+  getEnhancedJavaScript() {
+    return `
     <script>
         // Global state
         let allSessions = [];
@@ -1678,113 +1936,115 @@ return `<!DOCTYPE html>
         window.toggleSession = toggleSession;
     </script>
         `;
+  }
+
+  /**
+   * Setup keyboard shortcut listener
+   */
+  setupKeyboardShortcut() {
+    if (this.isListening) return;
+
+    if (process.stdin.isTTY) {
+      process.stdin.setRawMode(true);
+      process.stdin.resume();
+      process.stdin.setEncoding("utf8");
+
+      this.keyPressHandler = (key) => {
+        if (key === "\u0003") process.exit();
+        if (key.toLowerCase() === "o") this.openReport();
+      };
+
+      process.stdin.on("data", this.keyPressHandler);
+      this.isListening = true;
+    }
+  }
+
+  /**
+   * Open report in default browser
+   */
+  async openReport() {
+    if (!this.reportPath) {
+      console.error("No report file available to open");
+      return;
     }
 
-    /**
-     * Setup keyboard shortcut listener
-     */
-    setupKeyboardShortcut() {
-        if (this.isListening) return;
-        
-        if (process.stdin.isTTY) {
-            process.stdin.setRawMode(true);
-            process.stdin.resume();
-            process.stdin.setEncoding('utf8');
-            
-            this.keyPressHandler = (key) => {
-                if (key === '\u0003') process.exit();
-                if (key.toLowerCase() === 'o') this.openReport();
-            };
-            
-            process.stdin.on('data', this.keyPressHandler);
-            this.isListening = true;
-        }
+    try {
+      const open = require("open");
+      await open(this.reportPath);
+      console.log(`Opened enhanced report: ${this.reportPath}`);
+    } catch (error) {
+      console.error(`Failed to open report: ${error.message}`);
+    }
+  }
+
+  /**
+   * Static method to generate report from files
+   */
+  static generateFromFiles(options = {}) {
+    const reporter = new EnhancedHtmlReporter(options);
+    const trackingFiles = reporter.findTrackingFiles();
+
+    if (trackingFiles.length === 0) {
+      console.log("⚠️  No tracking files found");
+      return null;
     }
 
-    /**
-     * Open report in default browser
-     */
-    async openReport() {
-        if (!this.reportPath) {
-            console.error('No report file available to open');
-            return;
+    let combinedData = [];
+    let detectedFramework = "unknown";
+
+    trackingFiles.forEach((filePath) => {
+      try {
+        const fileContent = fs.readFileSync(filePath, "utf8");
+        const data = JSON.parse(fileContent);
+
+        // Detect framework
+        if (filePath.includes("navigation-tracking")) {
+          detectedFramework = "appium";
+        } else if (filePath.includes("url-tracking")) {
+          detectedFramework = data.some?.((session) => session.metadata)
+            ? "playwright"
+            : "webdriverio";
         }
-        
-        try {
-            const open = require('open');
-            await open(this.reportPath);
-            console.log(`Opened enhanced report: ${this.reportPath}`);
-        } catch (error) {
-            console.error(`Failed to open report: ${error.message}`);
+
+        if (Array.isArray(data)) {
+          combinedData = combinedData.concat(data);
+        } else {
+          combinedData.push(data);
         }
+      } catch (error) {
+        console.error(`Error reading ${filePath}: ${error.message}`);
+      }
+    });
+
+    if (combinedData.length === 0) {
+      console.log("⚠️  No valid tracking data found");
+      return null;
     }
 
-    /**
-     * Static method to generate report from files
-     */
-    static generateFromFiles(options = {}) {
-        const reporter = new EnhancedHtmlReporter(options);
-        const trackingFiles = reporter.findTrackingFiles();
-        
-        if (trackingFiles.length === 0) {
-            console.log('⚠️  No tracking files found');
-            return null;
-        }
-        
-        let combinedData = [];
-        let detectedFramework = 'unknown';
-        
-        trackingFiles.forEach((filePath) => {
-            try {
-                const fileContent = fs.readFileSync(filePath, 'utf8');
-                const data = JSON.parse(fileContent);
-                
-                // Detect framework
-                if (filePath.includes('navigation-tracking')) {
-                    detectedFramework = 'appium';
-                } else if (filePath.includes('url-tracking')) {
-                    detectedFramework = data.some?.(session => session.metadata) ? 'playwright' : 'webdriverio';
-                }
-                
-                if (Array.isArray(data)) {
-                    combinedData = combinedData.concat(data);
-                } else {
-                    combinedData.push(data);
-                }
-            } catch (error) {
-                console.error(`Error reading ${filePath}: ${error.message}`);
-            }
-        });
-        
-        if (combinedData.length === 0) {
-            console.log('⚠️  No valid tracking data found');
-            return null;
-        }
-        
-        return reporter.generateReport(combinedData, detectedFramework);
-    }
+    return reporter.generateReport(combinedData, detectedFramework);
+  }
 
-    /**
-     * Find tracking files in common locations
-     */
-    findTrackingFiles() {
-        const possibleFiles = [
-            'test-results/navigation-tracking.json',
-            'test-results/url-tracking.json',
-            'test-results/url-tracking-results.json'
-        ];
-        
-        return possibleFiles.filter(filePath => {
-            return fs.existsSync(filePath) && fs.statSync(filePath).size > 0;
-        });
-    }
+  /**
+   * Find tracking files in common locations
+   */
+  findTrackingFiles() {
+    const possibleFiles = [
+      "test-results/navigation-tracking.json",
+      "test-results/url-tracking.json",
+      "test-results/url-tracking-results.json",
+    ];
 
-    /**
-     * Generate inline sessions list with inline styles
-     */
-    generateInlineSessionsList(sessions, framework) {
-        if (!sessions || sessions.length === 0) {
-            return `
+    return possibleFiles.filter((filePath) => {
+      return fs.existsSync(filePath) && fs.statSync(filePath).size > 0;
+    });
+  }
+
+  /**
+   * Generate inline sessions list with inline styles
+   */
+  generateInlineSessionsList(sessions, framework) {
+    if (!sessions || sessions.length === 0) {
+      return `
             <div style="padding: 32px; text-align: center; color: #656d76;">
                 <svg width="32" height="32" viewBox="0 0 16 16" fill="currentColor" style="margin-bottom: 16px;">
                     <path d="M6 2c.306 0 .582.187.696.471L10 10.731l1.304-3.26A.751.751 0 0 1 12 7h3.25a.75.75 0 0 1 0 1.5H12.58l-1.855 4.64A.751.751 0 0 1 10 13a.751.751 0 0 1-.725-.529L6 3.269 4.696 6.531A.751.751 0 0 1 4 7H.75a.75.75 0 0 1 0-1.5H3.42l1.855-4.64A.751.751 0 0 1 6 2Z"/>
@@ -1793,11 +2053,17 @@ return `<!DOCTYPE html>
                 <p>No navigation tracking data is available for this report.</p>
             </div>
             `;
-        }
+    }
 
-        return sessions.map((session, index) => `
-            <div style="border-bottom: 1px solid var(--color-border-default); padding: 16px;" data-session-id="${session.session_id}">
-                <div style="display: flex; align-items: center; justify-content: space-between; cursor: pointer;" onclick="toggleSession('${session.session_id}')">
+    return sessions
+      .map(
+        (session, index) => `
+            <div style="border-bottom: 1px solid var(--color-border-default); padding: 16px;" data-session-id="${
+              session.session_id
+            }">
+                <div style="display: flex; align-items: center; justify-content: space-between; cursor: pointer;" onclick="toggleSession('${
+                  session.session_id
+                }')">
                     <div style="flex: 1;">
                         <div style="font-size: 16px; font-weight: 600; color: var(--color-accent-fg); margin-bottom: 8px;">
                             ${session.test_name}
@@ -1824,24 +2090,29 @@ return `<!DOCTYPE html>
                         </div>
                     </div>
                     <div style="display: flex; align-items: center; gap: 8px;">
-                        <span style="background: var(--color-success-subtle); border: 1px solid var(--color-success-emphasis); border-radius: 12px; padding: 2px 8px; font-size: 12px; font-weight: 500; color: var(--color-success-emphasis);">✓ ${session.status || 'completed'}</span>
-                        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style="transition: transform 0.2s ease;" class="chevron-${session.session_id}">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style="transition: transform 0.2s ease;" class="chevron-${
+                          session.session_id
+                        }">
                             <path d="M12.78 5.22a.749.749 0 0 1 0 1.06l-4.25 4.25a.749.749 0 0 1-1.06 0L3.22 6.28a.749.749 0 1 1 1.06-1.06L8 8.939l3.72-3.719a.749.749 0 0 1 1.06 0Z"/>
                         </svg>
                     </div>
                 </div>
-                <div id="session-${session.session_id}" style="display: none; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--color-border-default);">
+                <div id="session-${
+                  session.session_id
+                }" style="display: none; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--color-border-default);">
                     ${this.generateInlineSessionDetails(session)}
                 </div>
             </div>
-        `).join('');
-    }
+        `
+      )
+      .join("");
+  }
 
-    /**
-     * Generate inline session details with inline styles
-     */
-    generateInlineSessionDetails(session) {
-        return `
+  /**
+   * Generate inline session details with inline styles
+   */
+  generateInlineSessionDetails(session) {
+    return `
         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin-bottom: 24px;">
             <!-- Test Overview -->
             <div style="background: var(--color-canvas-subtle); border: 1px solid var(--color-border-default); border-radius: 6px; padding: 16px;">
@@ -1851,28 +2122,42 @@ return `<!DOCTYPE html>
                     </svg>
                     Test Overview
                 </h4>
-                ${session.session_id ? `
+                ${
+                  session.session_id
+                    ? `
                 <div style="display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 12px;">
                     <span style="color: var(--color-fg-muted); font-weight: 500;">Session ID</span>
                     <span style="color: var(--color-fg-default); font-weight: 600; font-family: monospace;">${session.session_id}</span>
                 </div>
-                ` : ''}
-                ${session.build_name ? `
+                `
+                    : ""
+                }
+                ${
+                  session.build_name
+                    ? `
                 <div style="display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 12px;">
                     <span style="color: var(--color-fg-muted); font-weight: 500;">Build</span>
                     <span style="color: var(--color-fg-default); font-weight: 600;">${session.build_name}</span>
                 </div>
-                ` : ''}
-                ${session.username ? `
+                `
+                    : ""
+                }
+                ${
+                  session.username
+                    ? `
                 <div style="display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 12px;">
                     <span style="color: var(--color-fg-muted); font-weight: 500;">Executed by</span>
                     <span style="color: var(--color-fg-default); font-weight: 600;">${session.username}</span>
                 </div>
-                ` : ''}
+                `
+                    : ""
+                }
             </div>
 
             <!-- Environment -->
-            ${session.platform || session.browser ? `
+            ${
+              session.platform || session.browser
+                ? `
             <div style="background: var(--color-canvas-subtle); border: 1px solid var(--color-border-default); border-radius: 6px; padding: 16px;">
                 <h4 style="font-size: 14px; font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; color: var(--color-fg-default);">
                     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style="margin-right: 8px;">
@@ -1880,26 +2165,46 @@ return `<!DOCTYPE html>
                     </svg>
                     Environment
                 </h4>
-                ${session.platform ? `
+                ${
+                  session.platform
+                    ? `
                 <div style="display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 12px;">
                     <span style="color: var(--color-fg-muted); font-weight: 500;">Platform</span>
                     <span style="color: var(--color-fg-default); font-weight: 600;">${session.platform}</span>
                 </div>
-                ` : ''}
-                ${session.browser ? `
+                `
+                    : ""
+                }
+                ${
+                  session.browser
+                    ? `
                 <div style="display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 12px;">
                     <span style="color: var(--color-fg-muted); font-weight: 500;">Browser</span>
-                    <span style="color: var(--color-fg-default); font-weight: 600;">${session.browser}${session.browser_version ? ` ${session.browser_version}` : ''}</span>
+                    <span style="color: var(--color-fg-default); font-weight: 600;">${
+                      session.browser
+                    }${
+                        session.browser_version
+                          ? ` ${session.browser_version}`
+                          : ""
+                      }</span>
                 </div>
-                ` : ''}
-                ${session.resolution ? `
+                `
+                    : ""
+                }
+                ${
+                  session.resolution
+                    ? `
                 <div style="display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 12px;">
                     <span style="color: var(--color-fg-muted); font-weight: 500;">Resolution</span>
                     <span style="color: var(--color-fg-default); font-weight: 600; font-family: monospace;">${session.resolution}</span>
                 </div>
-                ` : ''}
+                `
+                    : ""
+                }
             </div>
-            ` : ''}
+            `
+                : ""
+            }
 
             <!-- Timing -->
             <div style="background: var(--color-canvas-subtle); border: 1px solid var(--color-border-default); border-radius: 6px; padding: 16px;">
@@ -1909,21 +2214,35 @@ return `<!DOCTYPE html>
                     </svg>
                     Timing & Performance
                 </h4>
-                ${session.start_timestamp ? `
+                ${
+                  session.start_timestamp
+                    ? `
                 <div style="display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 12px;">
                     <span style="color: var(--color-fg-muted); font-weight: 500;">Started</span>
-                    <span style="color: var(--color-fg-default); font-weight: 600; font-family: monospace;">${new Date(session.start_timestamp).toLocaleString()}</span>
+                    <span style="color: var(--color-fg-default); font-weight: 600; font-family: monospace;">${new Date(
+                      session.start_timestamp
+                    ).toLocaleString()}</span>
                 </div>
-                ` : ''}
-                ${session.duration ? `
+                `
+                    : ""
+                }
+                ${
+                  session.duration
+                    ? `
                 <div style="display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 12px;">
                     <span style="color: var(--color-fg-muted); font-weight: 500;">Duration</span>
-                    <span style="color: var(--color-fg-default); font-weight: 600;">${Math.round(session.duration/1000)}s</span>
+                    <span style="color: var(--color-fg-default); font-weight: 600;">${Math.round(
+                      session.duration / 1000
+                    )}s</span>
                 </div>
-                ` : ''}
+                `
+                    : ""
+                }
                 <div style="display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 12px;">
                     <span style="color: var(--color-fg-muted); font-weight: 500;">Navigation Count</span>
-                    <span style="color: var(--color-fg-default); font-weight: 600;">${session.navigations.length}</span>
+                    <span style="color: var(--color-fg-default); font-weight: 600;">${
+                      session.navigations.length
+                    }</span>
                 </div>
             </div>
         </div>
@@ -1934,17 +2253,22 @@ return `<!DOCTYPE html>
         <!-- Navigation Timeline -->
         ${this.generateInlineTimeline(session.navigations)}
         `;
-    }
+  }
 
-    /**
-     * Generate inline resources section
-     */
-    generateInlineResources(session) {
-        const hasLinks = session.video_url || session.screenshot_url || session.console_logs_url || 
-                         session.network_logs_url || session.command_logs_url || session.public_url;
-        if (!hasLinks) return '';
+  /**
+   * Generate inline resources section
+   */
+  generateInlineResources(session) {
+    const hasLinks =
+      session.video_url ||
+      session.screenshot_url ||
+      session.console_logs_url ||
+      session.network_logs_url ||
+      session.command_logs_url ||
+      session.public_url;
+    if (!hasLinks) return "";
 
-        return `
+    return `
         <div style="margin-bottom: 16px;">
             <h4 style="font-size: 14px; font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; color: var(--color-fg-default);">
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style="margin-right: 8px;">
@@ -1953,41 +2277,53 @@ return `<!DOCTYPE html>
                 Resources & Actions
             </h4>
             <div style="display: flex; flex-wrap: wrap; gap: 8px;">
-                ${session.public_url ? `
+                ${
+                  session.public_url
+                    ? `
                 <a href="${session.public_url}" target="_blank" style="background: var(--color-success-emphasis); border: 1px solid var(--color-success-emphasis); border-radius: 6px; padding: 6px 12px; font-size: 12px; color: var(--color-fg-on-emphasis); text-decoration: none; display: inline-flex; align-items: center;">
                     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style="margin-right: 4px;">
                         <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>
                     </svg>
                     View Public Report
                 </a>
-                ` : ''}
-                ${session.video_url ? `
+                `
+                    : ""
+                }
+                ${
+                  session.video_url
+                    ? `
                 <a href="${session.video_url}" target="_blank" style="background: var(--color-btn-bg); border: 1px solid var(--color-btn-border); border-radius: 6px; padding: 6px 12px; font-size: 12px; color: var(--color-fg-default); text-decoration: none; display: inline-flex; align-items: center;">
                     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style="margin-right: 4px;">
                         <path d="m11.596 8.697-6.363 3.692c-.54.313-1.233-.066-1.233-.697V4.308c0-.63.692-1.01 1.233-.696l6.363 3.692a.802.802 0 0 1 0 1.393z"/>
                     </svg>
                     Video Recording
                 </a>
-                ` : ''}
-                ${session.console_logs_url ? `
+                `
+                    : ""
+                }
+                ${
+                  session.console_logs_url
+                    ? `
                 <a href="${session.console_logs_url}" target="_blank" style="background: var(--color-btn-bg); border: 1px solid var(--color-btn-border); border-radius: 6px; padding: 6px 12px; font-size: 12px; color: var(--color-fg-default); text-decoration: none; display: inline-flex; align-items: center;">
                     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style="margin-right: 4px;">
                         <path d="M0 2.75C0 1.784.784 1 1.75 1h12.5c.966 0 1.75.784 1.75 1.75v10.5A1.75 1.75 0 0 1 14.25 15H1.75A1.75 1.75 0 0 1 0 13.25V2.75zm1.75-.25a.25.25 0 0 0-.25.25v10.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25V2.75a.25.25 0 0 0-.25-.25H1.75zM7.25 8a.75.75 0 0 1-.22.53l-2.25 2.25a.75.75 0 0 1-1.06-1.06L5.44 8 3.72 6.28a.75.75 0 0 1 1.06-1.06l2.25 2.25c.141.14.22.331.22.53zm1.5 1.5a.75.75 0 0 1 0-1.5h3a.75.75 0 0 1 0 1.5h-3z"/>
                     </svg>
                     Console Logs
                 </a>
-                ` : ''}
+                `
+                    : ""
+                }
             </div>
         </div>
         `;
-    }
+  }
 
-    /**
-     * Generate inline timeline
-     */
-    generateInlineTimeline(navigations) {
-        if (!navigations || navigations.length === 0) {
-            return `
+  /**
+   * Generate inline timeline
+   */
+  generateInlineTimeline(navigations) {
+    if (!navigations || navigations.length === 0) {
+      return `
             <div style="background: #ffffff; border: 1px solid #d0d7de; border-radius: 6px; padding: 16px;">
                 <h4 style="font-size: 14px; font-weight: 600; margin-bottom: 16px; display: flex; align-items: center;">
                     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style="margin-right: 8px;">
@@ -2000,9 +2336,9 @@ return `<!DOCTYPE html>
                 </div>
             </div>
             `;
-        }
+    }
 
-        return `
+    return `
         <div style="background: var(--color-canvas-default); border: 1px solid var(--color-border-default); border-radius: 6px; padding: 16px;">
             <h4 style="font-size: 14px; font-weight: 600; margin-bottom: 16px; display: flex; align-items: center; justify-content: space-between; color: var(--color-fg-default);">
                 <span style="display: flex; align-items: center;">
@@ -2011,23 +2347,37 @@ return `<!DOCTYPE html>
                     </svg>
                     Navigation Timeline
                 </span>
-                <span style="background: var(--color-accent-emphasis); color: var(--color-fg-on-emphasis); padding: 2px 8px; border-radius: 12px; font-size: 12px; font-weight: 600;">${navigations.length} steps</span>
+                <span style="background: var(--color-accent-emphasis); color: var(--color-fg-on-emphasis); padding: 2px 8px; border-radius: 12px; font-size: 12px; font-weight: 600;">${
+                  navigations.length
+                } steps</span>
             </h4>
-            ${navigations.map((nav, index) => `
+            ${navigations
+              .map(
+                (nav, index) => `
                 <div style="display: flex; margin-bottom: 16px; position: relative;">
-                    ${index < navigations.length - 1 ? `
+                    ${
+                      index < navigations.length - 1
+                        ? `
                     <div style="position: absolute; left: 15px; top: 32px; bottom: -16px; width: 2px; background: var(--color-border-default);"></div>
-                    ` : ''}
+                    `
+                        : ""
+                    }
                     <div style="width: 32px; height: 32px; border-radius: 50%; background: var(--color-accent-emphasis); color: var(--color-fg-on-emphasis); display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; margin-right: 16px; flex-shrink: 0; border: 3px solid var(--color-canvas-default); position: relative; z-index: 1;">
                         ${index + 1}
                     </div>
                     <div style="flex: 1;">
                         <div style="font-size: 14px; font-weight: 600; margin-bottom: 4px;">
-                            <span style="background: var(--color-success-subtle); border: 1px solid var(--color-success-emphasis); border-radius: 12px; padding: 2px 8px; font-size: 12px; font-weight: 500; color: var(--color-success-emphasis); margin-right: 8px;">${nav.navigation_type}</span>
-                            <span style="font-size: 12px; color: var(--color-fg-muted);">${this.formatTimestamp(nav.timestamp)}</span>
+                            <span style="background: var(--color-success-subtle); border: 1px solid var(--color-success-emphasis); border-radius: 12px; padding: 2px 8px; font-size: 12px; font-weight: 500; color: var(--color-success-emphasis); margin-right: 8px;">${
+                              nav.navigation_type
+                            }</span>
+                            <span style="font-size: 12px; color: var(--color-fg-muted);">${this.formatTimestamp(
+                              nav.timestamp
+                            )}</span>
                         </div>
                         <div style="margin-top: 8px;">
-                            ${nav.previous_url !== 'null' ? `
+                            ${
+                              nav.previous_url !== "null"
+                                ? `
                             <div style="margin-bottom: 8px;">
                                 <div style="font-size: 10px; color: var(--color-fg-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; font-weight: 600;">FROM</div>
                                 <div style="background: var(--color-canvas-subtle); border: 1px solid var(--color-border-default); border-radius: 6px; padding: 12px;">
@@ -2037,12 +2387,18 @@ return `<!DOCTYPE html>
                                         </svg>
                                         <span class="title-text">Loading...</span>
                                     </div>
-                                    <a href="${nav.previous_url}" target="_blank" style="color: var(--color-fg-default); text-decoration: none; font-family: monospace; font-size: 12px; word-break: break-all;" data-url="${nav.previous_url}" data-title-target="inline-nav-${index}-prev-title">
+                                    <a href="${
+                                      nav.previous_url
+                                    }" target="_blank" style="color: var(--color-fg-default); text-decoration: none; font-family: monospace; font-size: 12px; word-break: break-all;" data-url="${
+                                    nav.previous_url
+                                  }" data-title-target="inline-nav-${index}-prev-title">
                                         ${this.formatUrl(nav.previous_url)}
                                     </a>
                                 </div>
                             </div>
-                            ` : ''}
+                            `
+                                : ""
+                            }
                             <div>
                                 <div style="font-size: 10px; color: var(--color-fg-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; font-weight: 600;">TO</div>
                                 <div style="background: var(--color-accent-subtle); border: 1px solid var(--color-accent-emphasis); border-radius: 6px; padding: 12px;">
@@ -2052,7 +2408,11 @@ return `<!DOCTYPE html>
                                         </svg>
                                         <span class="title-text">Loading...</span>
                                     </div>
-                                    <a href="${nav.current_url}" target="_blank" style="color: var(--color-fg-default); text-decoration: none; font-family: monospace; font-size: 12px; word-break: break-all;" data-url="${nav.current_url}" data-title-target="inline-nav-${index}-curr-title">
+                                    <a href="${
+                                      nav.current_url
+                                    }" target="_blank" style="color: var(--color-fg-default); text-decoration: none; font-family: monospace; font-size: 12px; word-break: break-all;" data-url="${
+                  nav.current_url
+                }" data-title-target="inline-nav-${index}-curr-title">
                                         ${this.formatUrl(nav.current_url)}
                                     </a>
                                 </div>
@@ -2060,16 +2420,18 @@ return `<!DOCTYPE html>
                         </div>
                     </div>
                 </div>
-            `).join('')}
+            `
+              )
+              .join("")}
         </div>
         `;
-    }
+  }
 
-    /**
-     * Get simple JavaScript for basic functionality
-     */
-    getSimpleJavaScript() {
-        return `
+  /**
+   * Get simple JavaScript for basic functionality
+   */
+  getSimpleJavaScript() {
+    return `
     <script>
         // Cache for fetched titles to avoid duplicate requests
         const titleCache = new Map();
@@ -2301,7 +2663,7 @@ return `<!DOCTYPE html>
         });
     </script>
         `;
-    }
+  }
 }
 
-module.exports = { EnhancedHtmlReporter }; 
+module.exports = { EnhancedHtmlReporter };

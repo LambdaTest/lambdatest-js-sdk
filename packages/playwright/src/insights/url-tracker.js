@@ -11,14 +11,35 @@ try {
     logger.error('Failed to import ApiUploader:', e.message);
 }
 
-// Import Enhanced HTML Reporter
+// Import Enhanced HTML Reporter with multiple fallback strategies
 let EnhancedHtmlReporter;
 try {
+    // Strategy 1: Try relative path import
     const { EnhancedHtmlReporter: Reporter } = require('../../../sdk-utils');
     EnhancedHtmlReporter = Reporter;
-} catch (e) {
-    // Fallback if sdk-utils is not available
-    console.warn('Enhanced HTML Reporter not available. Install @lambdatest/sdk-utils for HTML reports.');
+    console.log('✅ Enhanced HTML Reporter imported successfully (relative path)');
+} catch (e1) {
+    try {
+        // Strategy 2: Try direct import from @lambdatest/sdk-utils
+        const { EnhancedHtmlReporter: Reporter } = require('@lambdatest/sdk-utils');
+        EnhancedHtmlReporter = Reporter;
+        console.log('✅ Enhanced HTML Reporter imported successfully (direct package)');
+    } catch (e2) {
+        try {
+            // Strategy 3: Try importing directly from the html-reporter-enhanced file
+            const { EnhancedHtmlReporter: Reporter } = require('../../../sdk-utils/src/insights/html-reporter-enhanced');
+            EnhancedHtmlReporter = Reporter;
+            console.log('✅ Enhanced HTML Reporter imported successfully (direct file)');
+        } catch (e3) {
+            // All strategies failed
+            console.warn('❌ Enhanced HTML Reporter not available. Install @lambdatest/sdk-utils for HTML reports.');
+            console.warn('Import errors:');
+            console.warn('  Relative path:', e1.message);
+            console.warn('  Direct package:', e2.message);
+            console.warn('  Direct file:', e3.message);
+            EnhancedHtmlReporter = null;
+        }
+    }
 }
 
 // Track if we've shown the HTML report prompt
@@ -26,6 +47,9 @@ let hasShownReportPrompt = false;
 
 // Store the HTML reporter instance globally
 let globalHtmlReporter = null;
+
+// Flag to track if all tests are complete
+let allTestsComplete = false;
 
 // Function to show the HTML report prompt and auto-open like Playwright
 function showHtmlReportPrompt(htmlReporter, reportPath) {
@@ -72,6 +96,7 @@ class UrlTrackerPlugin extends EventEmitter {
             preserveHistory: options.preserveHistory ?? true,
             // API upload options
             enableApiUpload: options.enableApiUpload ?? true,
+            autoUploadOnTestEnd: options.autoUploadOnTestEnd ?? true,  // NEW: Automatic upload on test completion
             apiEndpoint: options.apiEndpoint,
             username: options.username,
             accessKey: options.accessKey,
@@ -103,22 +128,58 @@ class UrlTrackerPlugin extends EventEmitter {
             logger.verbose('Spec file is unknown, will attempt to determine from test metadata');
         }
         
-        // Initialize API uploader if enabled
+        // Initialize API uploader if enabled with comprehensive validation
         if (this.options.enableApiUpload) {
-            logger.info('API upload is enabled, initializing API uploader...');
+            logger.info('API upload is enabled, initializing API uploader with validation...');
             try {
                 if (!ApiUploader) {
-                    throw new Error('ApiUploader class not available');
+                    throw new Error('ApiUploader class not available - ensure @lambdatest/sdk-utils is installed');
                 }
+                
+                // Check credentials before initializing
+                const username = this.options.username || process.env.LT_USERNAME;
+                const accessKey = this.options.accessKey || process.env.LT_ACCESS_KEY;
+                
+                if (!username || !accessKey) {
+                    throw new Error('LT_USERNAME and LT_ACCESS_KEY environment variables are required for API upload');
+                }
+                
+                // Validate credential format
+                if (username.length < 3) {
+                    throw new Error('LT_USERNAME appears to be invalid (too short)');
+                }
+                if (accessKey.length < 10) {
+                    throw new Error('LT_ACCESS_KEY appears to be invalid (too short)');
+                }
+                
+                // Initialize the uploader
                 this.apiUploader = ApiUploader.forPlaywright({
                     apiEndpoint: this.options.apiEndpoint,
-                    username: this.options.username,
-                    accessKey: this.options.accessKey,
-                    verbose: options.verbose || false  // Pass through verbose option
+                    username: username,
+                    accessKey: accessKey,
+                    verbose: this.options.verbose || false,
+                    timeout: 30000, // 30 second timeout
+                    retries: 2 // Allow 2 retries
                 });
-                logger.success('API uploader initialized successfully');
+                
+                logger.success(`API uploader initialized successfully for worker ${this.workerId}`);
+                logger.verbose(`API endpoint: ${this.apiUploader.apiEndpoint || 'default'}`);
+                logger.verbose(`Username: ${username ? username.substring(0, 3) + '***' : 'not set'}`);
+                logger.verbose(`Access key: ${accessKey ? '***' + accessKey.substring(accessKey.length - 3) : 'not set'}`);
+                
+                logger.info('API uploader ready - health checks removed for better performance');
+                
             } catch (error) {
                 logger.error(`Failed to initialize API uploader: ${error.message}`);
+                
+                // Provide helpful error messages
+                if (error.message.includes('LT_USERNAME') || error.message.includes('LT_ACCESS_KEY')) {
+                    logger.error('API Upload Setup Help:');
+                    logger.error('  1. Get your credentials from: https://accounts.lambdatest.com/profile');
+                    logger.error('  2. Set environment variables: LT_USERNAME=your_username LT_ACCESS_KEY=your_key');
+                    logger.error('  3. Or pass them in options: { username: "...", accessKey: "..." }');
+                }
+                
                 this.options.enableApiUpload = false; // Disable API upload on failure
                 this.apiUploader = null;
             }
@@ -167,19 +228,43 @@ class UrlTrackerPlugin extends EventEmitter {
             'dummy': 'dummy'              // Dummy placeholder
         };
         
-        // Register this tracker in the global list of active trackers
+        // Register this tracker in the worker-specific list of active trackers
         try {
+            // Playwright's worker index starts from 1, parallel index from 0
+            // Use parallel index for consistency (0-based)
+            const workerId = process.env.TEST_PARALLEL_INDEX || process.env.TEST_WORKER_INDEX || '0';
+            this.workerId = workerId;
+            
+            logger.verbose(`URL Tracker initialized for worker ${workerId}`);
+            
             const globalObj = global || window || {};
             if (!globalObj._activeUrlTrackers) {
                 globalObj._activeUrlTrackers = [];
             }
             globalObj._activeUrlTrackers.push(this);
+            
+            // Initialize worker-specific storage
+            if (!globalObj._workerData) {
+                globalObj._workerData = {
+                    workerId: workerId,
+                    sessions: [],
+                    apiSuccesses: [],
+                    apiErrors: [],
+                    apiSkips: [],
+                    cleanupCalls: []
+                };
+            }
         } catch (e) {
             logger.error('Error registering tracker globally:', e);
         }
         
         // CRITICAL: Setup automatic cleanup for manual usage
         this.setupAutomaticCleanup();
+        
+        // NEW: Setup automatic test end detection for upload
+        if (this.options.autoUploadOnTestEnd) {
+            this.setupTestEndDetection();
+        }
         
         // Create initial output files to ensure permissions are correct
         this.ensureOutputFilesExist();
@@ -574,6 +659,17 @@ class UrlTrackerPlugin extends EventEmitter {
                 } catch (e) {
                     logger.error('Error tracking initial page:', e);
                 }
+                
+                // CRITICAL: Add upload trigger function for immediate upload
+                window.__urlTrackerUploadNow = function() {
+                    try {
+                        // Signal that immediate upload should happen
+                        window.__immediateUploadRequested = true;
+                        console.log('URL Tracker: Immediate upload requested');
+                    } catch (e) {
+                        console.error('Error setting upload flag:', e);
+                    }
+                };
             }).catch((error) => {
                 logger.error('Error adding init script:', error);
             });
@@ -688,6 +784,35 @@ class UrlTrackerPlugin extends EventEmitter {
                 }
             };
             
+            // Add uploadResults method to page object for manual upload during test
+            this.page.uploadTrackingResults = async () => {
+                if (this.options.enableApiUpload && this.apiUploader && this.trackingResults.length > 0) {
+                    logger.info(`[API] Manual upload triggered during test execution`);
+                    
+                    try {
+                        // Fetch metadata if not available
+                        if (!this.testMetadata) {
+                            await this.fetchTestMetadataWithRetry();
+                        }
+                        
+                        const trackingData = { navigations: this.trackingResults };
+                        const testId = ApiUploader.extractTestId(this.testMetadata, this.options);
+                        const uploadId = `manual_${this.workerId}_${Date.now()}`;
+                        
+                        const result = await this.performTrackedApiUpload(trackingData, testId, uploadId);
+                        logger.success(`✅ [API] Manual upload completed successfully during test`);
+                        return result;
+                        
+                    } catch (error) {
+                        logger.error(`❌ [API] Manual upload failed during test: ${error.message}`);
+                        throw error;
+                    }
+                } else {
+                    logger.warn(`[API] Manual upload skipped - conditions not met`);
+                    return null;
+                }
+            };
+            
         } catch (e) {
             logger.error('Error setting up Playwright method interception:', e);
         }
@@ -710,6 +835,387 @@ class UrlTrackerPlugin extends EventEmitter {
         if (!this.preserveHistory) {
             this.navigationHistory = [];
             this.trackingResults = [];
+        }
+    }
+
+    // IMPROVED METHOD: Write worker-specific API results with atomic operations and file locking
+    writeWorkerApiResult(resultData, type) {
+        const maxRetries = 3;
+        let attempt = 0;
+        
+        while (attempt < maxRetries) {
+            try {
+                const workerId = this.workerId || '0';
+                const resultsDir = path.join(process.cwd(), 'test-results', 'workers');
+                
+                // Atomic directory creation with proper error handling
+                this.ensureWorkerDirectoryExists(resultsDir);
+                
+                const fileName = `worker-${workerId}-api-${type}.jsonl`;
+                const filePath = path.join(resultsDir, fileName);
+                const lockFilePath = `${filePath}.lock`;
+                
+                // Ensure workerId is in the data for aggregation
+                if (!resultData.workerId) {
+                    resultData.workerId = workerId;
+                }
+                
+                // Add timestamp for debugging
+                resultData.writeTimestamp = new Date().toISOString();
+                resultData.attempt = attempt + 1;
+                
+                const jsonLine = JSON.stringify(resultData) + '\n';
+                
+                // Implement file locking to prevent concurrent writes
+                this.writeWithLock(filePath, lockFilePath, jsonLine);
+                
+                logger.info(`✅ Worker ${workerId}: API ${type} written to ${filePath} (attempt ${attempt + 1})`);
+                logger.verbose(`  Data: ${JSON.stringify(resultData, null, 2)}`);
+                
+                // Verify file was written successfully
+                this.verifyFileWrite(filePath, jsonLine);
+                return; // Success, exit retry loop
+                
+            } catch (error) {
+                attempt++;
+                logger.error(`Error writing worker API result (attempt ${attempt}/${maxRetries}): ${error.message}`);
+                
+                if (attempt >= maxRetries) {
+                    // Final attempt failed, try emergency backup
+                    this.createEmergencyBackup(resultData, type);
+                    throw error;
+                }
+                
+                // Wait before retry with exponential backoff (shorter delays for cleanup)
+                const delay = Math.pow(2, attempt) * 50; // 100ms, 200ms, 400ms (reduced from 200ms, 400ms, 800ms)
+                require('child_process').execSync(`timeout /t 1 > nul 2>&1 || sleep 0.1`, { stdio: 'ignore' });
+            }
+        }
+    }
+    
+    // Helper method for atomic directory creation
+    ensureWorkerDirectoryExists(resultsDir) {
+        try {
+            // Use atomic operation - this will either succeed or fail cleanly
+            fs.mkdirSync(resultsDir, { recursive: true, mode: 0o777 });
+        } catch (error) {
+            if (error.code !== 'EEXIST') {
+                // If it's not "already exists", it's a real error
+                throw error;
+            }
+            // EEXIST is fine - directory already exists
+        }
+        
+        // Verify directory is accessible
+        try {
+            fs.accessSync(resultsDir, fs.constants.W_OK);
+        } catch (accessError) {
+            throw new Error(`Worker directory not writable: ${resultsDir} - ${accessError.message}`);
+        }
+    }
+    
+    // Helper method for atomic file writes with locking
+    writeWithLock(filePath, lockFilePath, content) {
+        let lockAcquired = false;
+        let lockAttempts = 0;
+        const maxLockAttempts = 10;
+        
+        try {
+            // Try to acquire lock
+            while (!lockAcquired && lockAttempts < maxLockAttempts) {
+                try {
+                    fs.writeFileSync(lockFilePath, process.pid.toString(), { flag: 'wx' }); // wx = write exclusive (fails if exists)
+                    lockAcquired = true;
+                } catch (lockError) {
+                    if (lockError.code === 'EEXIST') {
+                        // Lock file exists, wait and retry
+                        lockAttempts++;
+                        const delay = 50 + (lockAttempts * 25); // Increasing delay
+                        require('child_process').execSync(`timeout /t 1 > nul 2>&1 || sleep 0.${delay}`, { stdio: 'ignore' });
+                        
+                        // Check if lock is stale (older than 5 seconds)
+                        try {
+                            const lockStats = fs.statSync(lockFilePath);
+                            const lockAge = Date.now() - lockStats.mtime.getTime();
+                            if (lockAge > 5000) {
+                                // Stale lock, remove it
+                                fs.unlinkSync(lockFilePath);
+                                logger.verbose(`Removed stale lock file: ${lockFilePath}`);
+                            }
+                        } catch (staleLockError) {
+                            // Lock file might have been removed by another process
+                        }
+                    } else {
+                        throw lockError;
+                    }
+                }
+            }
+            
+            if (!lockAcquired) {
+                throw new Error(`Failed to acquire file lock after ${maxLockAttempts} attempts`);
+            }
+            
+            // Perform the actual write operation
+            fs.appendFileSync(filePath, content, { encoding: 'utf8' });
+            
+        } finally {
+            // Always release the lock
+            if (lockAcquired) {
+                try {
+                    fs.unlinkSync(lockFilePath);
+                } catch (unlockError) {
+                    logger.verbose(`Warning: Could not remove lock file ${lockFilePath}: ${unlockError.message}`);
+                }
+            }
+        }
+    }
+    
+    // Helper method to verify file write
+    verifyFileWrite(filePath, expectedContent) {
+        try {
+            const fileContent = fs.readFileSync(filePath, 'utf-8');
+            if (!fileContent.includes(expectedContent.trim())) {
+                throw new Error('File content verification failed');
+            }
+            logger.verbose(`File write verified: ${filePath}`);
+        } catch (verifyError) {
+            throw new Error(`File write verification failed: ${verifyError.message}`);
+        }
+    }
+    
+    // Helper method for emergency backup when all retries fail
+    createEmergencyBackup(resultData, type) {
+        try {
+            const emergencyDir = path.join(process.cwd(), 'emergency-backups');
+            if (!fs.existsSync(emergencyDir)) {
+                fs.mkdirSync(emergencyDir, { recursive: true });
+            }
+            
+            const timestamp = Date.now();
+            const emergencyFile = path.join(emergencyDir, `worker-${this.workerId}-${type}-${timestamp}.json`);
+            fs.writeFileSync(emergencyFile, JSON.stringify(resultData, null, 2));
+            logger.warn(`Emergency backup created: ${emergencyFile}`);
+        } catch (emergencyError) {
+            logger.error(`Failed to create emergency backup: ${emergencyError.message}`);
+        }
+    }
+    
+
+    
+    // IMPROVED: Perform tracked API upload with immediate file writes and debugging
+    async performTrackedApiUpload(trackingData, testId, uploadId) {
+        logger.info(`[API TRACKED] Starting upload ${uploadId} for "${this.options.testName}"`);
+        
+        // IMMEDIATELY write "starting" status to file for debugging
+        const startRecord = {
+            testName: this.options.testName,
+            testId: testId,
+            uploadId: uploadId,
+            timestamp: new Date().toISOString(),
+            status: 'upload_started',
+            workerId: this.workerId,
+            navigationCount: trackingData.navigations.length,
+            phase: 'cleanup'
+        };
+        
+        try {
+            this.writeWorkerApiResult(startRecord, 'start');
+            logger.info(`✅ [API TRACKED] Upload start recorded for "${this.options.testName}"`);
+        } catch (writeError) {
+            logger.error(`❌ [API TRACKED] Failed to write start record: ${writeError.message}`);
+        }
+        
+        try {
+            logger.verbose(`[API TRACKED] Upload details:`);
+            logger.verbose(`  Test ID: ${testId}`);
+            logger.verbose(`  Navigation count: ${trackingData.navigations.length}`);
+            logger.verbose(`  Upload ID: ${uploadId}`);
+            logger.verbose(`  Worker ID: ${this.workerId}`);
+            
+            if (trackingData.navigations.length > 0) {
+                logger.verbose(`  First navigation: ${JSON.stringify(trackingData.navigations[0], null, 2)}`);
+            }
+            
+            // ENHANCED: Check if ApiUploader method exists with detailed validation
+            logger.info(`[API TRACKED] Validating API uploader method availability...`);
+            
+            if (!this.apiUploader) {
+                throw new Error('ApiUploader instance not available - check initialization');
+            }
+            
+            if (typeof this.apiUploader.uploadTrackingResults !== 'function') {
+                logger.error(`[API TRACKED] Available methods: ${Object.getOwnPropertyNames(this.apiUploader).join(', ')}`);
+                throw new Error('ApiUploader.uploadTrackingResults method not available - check API uploader version');
+            }
+            
+            logger.info(`[API TRACKED] API uploader validated, calling uploadTrackingResults...`);
+            logger.verbose(`[API TRACKED] Upload parameters: testId=${testId}, navigationCount=${trackingData.navigations.length}`);
+            
+            // Perform the actual upload with more detailed logging and timeout protection
+            const uploadStartTime = Date.now();
+            logger.info(`[API TRACKED] Starting actual upload at ${new Date(uploadStartTime).toISOString()}`);
+            
+            // CRITICAL: Direct upload without timeout to ensure it completes
+            const response = await this.apiUploader.uploadTrackingResults(trackingData, testId, {
+                trackingType: 'url-tracker',
+                framework: 'Playwright',
+                uploadId: uploadId,
+                workerId: this.workerId,
+                phase: 'cleanup'
+            });
+            const uploadDuration = Date.now() - uploadStartTime;
+            
+            logger.info(`[API TRACKED] Upload completed in ${uploadDuration}ms`);
+            
+            // Record successful upload
+            const successRecord = {
+                testName: this.options.testName,
+                testId: testId,
+                uploadId: uploadId,
+                timestamp: new Date().toISOString(),
+                status: 'confirmed_success',
+                response: response,
+                workerId: this.workerId,
+                navigationCount: trackingData.navigations.length,
+                duration: uploadDuration
+            };
+            
+            // Store in worker data
+            if (!global._workerData) {
+                global._workerData = { apiSuccesses: [], apiErrors: [], apiSkips: [], sessions: [], cleanupCalls: [] };
+            }
+            if (!global._workerData.apiSuccesses) {
+                global._workerData.apiSuccesses = [];
+            }
+            global._workerData.apiSuccesses.push(successRecord);
+            
+            // Write to worker file immediately
+            this.writeWorkerApiResult(successRecord, 'success');
+            
+            // Clean up from active uploads
+            if (global._activeApiUploads && global._activeApiUploads.has(uploadId)) {
+                const upload = global._activeApiUploads.get(uploadId);
+                upload.status = 'completed';
+                upload.endTime = Date.now();
+                upload.duration = uploadDuration;
+                upload.response = response;
+                
+                logger.success(`✅ [API TRACKED] Upload ${uploadId} SUCCESSFUL for "${this.options.testName}" (Duration: ${uploadDuration}ms)`);
+                logger.verbose(`[API TRACKED] Response: ${JSON.stringify(response, null, 2)}`);
+                
+                // CRITICAL: Remove from active uploads immediately upon completion
+                global._activeApiUploads.delete(uploadId);
+                logger.info(`[API TRACKED] Removed completed upload ${uploadId} from active uploads (${global._activeApiUploads.size} remaining)`);
+            }
+            
+            return response;
+            
+        } catch (error) {
+            const uploadDuration = Date.now() - (startRecord.startTime || Date.now());
+            logger.error(`❌ [API TRACKED] Upload ${uploadId} FAILED for "${this.options.testName}" after ${uploadDuration}ms: ${error.message}`);
+            
+            // Log detailed error information
+            logger.error(`[API TRACKED] Error type: ${error.constructor.name}`);
+            logger.error(`[API TRACKED] Error message: ${error.message}`);
+            if (error.response) {
+                logger.error(`[API TRACKED] Error response: ${JSON.stringify(error.response, null, 2)}`);
+            }
+            if (error.stack) {
+                logger.verbose(`[API TRACKED] Error stack: ${error.stack}`);
+            }
+            
+            // Record error with more detail
+            const errorRecord = {
+                testName: this.options.testName,
+                testId: testId,
+                uploadId: uploadId,
+                error: error.message,
+                errorType: error.constructor.name,
+                timestamp: new Date().toISOString(),
+                workerId: this.workerId,
+                details: error.response ? error.response : 'No response details',
+                stack: error.stack,
+                type: 'upload_error',
+                duration: uploadDuration
+            };
+            
+            // Store in worker data
+            if (!global._workerData) {
+                global._workerData = { apiSuccesses: [], apiErrors: [], apiSkips: [], sessions: [], cleanupCalls: [] };
+            }
+            if (!global._workerData.apiErrors) {
+                global._workerData.apiErrors = [];
+            }
+            global._workerData.apiErrors.push(errorRecord);
+            
+            // Write to worker file immediately
+            this.writeWorkerApiResult(errorRecord, 'error');
+            
+            // Update active uploads and remove failed upload
+            if (global._activeApiUploads && global._activeApiUploads.has(uploadId)) {
+                const upload = global._activeApiUploads.get(uploadId);
+                upload.status = 'failed';
+                upload.error = error.message;
+                upload.endTime = Date.now();
+                upload.duration = uploadDuration;
+                
+                // CRITICAL: Remove from active uploads immediately upon failure
+                global._activeApiUploads.delete(uploadId);
+                logger.info(`[API TRACKED] Removed failed upload ${uploadId} from active uploads (${global._activeApiUploads.size} remaining)`);
+            }
+            
+            // Re-throw the error so it can be handled by the caller
+            throw error;
+        }
+    }
+
+    // IMPROVED: Write worker-specific session data to files with better error handling and immediate writing
+    writeWorkerSessionData(sessionData) {
+        try {
+            const workerId = this.workerId || '0';
+            const resultsDir = path.join(process.cwd(), 'test-results', 'workers');
+            
+            // Ensure worker results directory exists with retry
+            this.ensureWorkerDirectoryExists(resultsDir);
+            
+            const fileName = `worker-${workerId}-sessions.jsonl`;
+            const filePath = path.join(resultsDir, fileName);
+            const lockFilePath = `${filePath}.lock`;
+            
+            // Add metadata for debugging
+            sessionData.writeTimestamp = new Date().toISOString();
+            sessionData.workerId = workerId;
+            sessionData.phase = 'cleanup';
+            
+            // Append to JSONL file (one JSON object per line) with locking
+            const jsonLine = JSON.stringify(sessionData) + '\n';
+            
+            // Use the same locking mechanism as API results
+            this.writeWithLock(filePath, lockFilePath, jsonLine);
+            
+            logger.info(`✅ Worker ${workerId}: Session data written to ${filePath}`);
+            logger.verbose(`  Session: ${sessionData.session_id || 'no-id'} (${sessionData.navigations?.length || 0} navigations)`);
+            
+            // Verify file was written successfully
+            this.verifyFileWrite(filePath, jsonLine);
+            
+        } catch (error) {
+            logger.error(`❌ Error writing worker session data: ${error.message}`);
+            
+            // Try emergency backup for session data
+            try {
+                const emergencyDir = path.join(process.cwd(), 'emergency-backups');
+                if (!fs.existsSync(emergencyDir)) {
+                    fs.mkdirSync(emergencyDir, { recursive: true });
+                }
+                
+                const timestamp = Date.now();
+                const emergencyFile = path.join(emergencyDir, `worker-${this.workerId}-session-${timestamp}.json`);
+                fs.writeFileSync(emergencyFile, JSON.stringify(sessionData, null, 2));
+                logger.warn(`Emergency session backup created: ${emergencyFile}`);
+            } catch (emergencyError) {
+                logger.error(`Failed to create emergency session backup: ${emergencyError.message}`);
+            }
         }
     }
 
@@ -770,17 +1276,49 @@ class UrlTrackerPlugin extends EventEmitter {
             logger.verbose(`No tracking results available`);
         }
         
-        // DEBUG: Add global tracking for cleanup calls
-        if (!global._urlTrackerCleanupCalls) {
-            global._urlTrackerCleanupCalls = [];
+        // DEBUG: Add worker-specific tracking for cleanup calls
+        if (!global._workerData) {
+            global._workerData = {
+                workerId: this.workerId || '0',
+                sessions: [],
+                apiSuccesses: [],
+                apiErrors: [],
+                apiSkips: [],
+                cleanupCalls: []
+            };
         }
-        global._urlTrackerCleanupCalls.push({
+        
+        const cleanupCall = {
             testName: this.options.testName,
             timestamp: new Date().toISOString(),
             apiUploadEnabled: this.options.enableApiUpload,
             hasApiUploader: !!this.apiUploader,
-            trackingResultsCount: this.trackingResults ? this.trackingResults.length : 0
-        });
+            trackingResultsCount: this.trackingResults ? this.trackingResults.length : 0,
+            workerId: this.workerId
+        };
+        
+        global._workerData.cleanupCalls.push(cleanupCall);
+        
+        // ALWAYS write cleanup call to file for debugging
+        try {
+            const resultsDir = path.join(process.cwd(), 'test-results', 'workers');
+            if (!fs.existsSync(resultsDir)) {
+                fs.mkdirSync(resultsDir, { recursive: true, mode: 0o777 });
+            }
+            
+            const cleanupFileName = `worker-${this.workerId || '0'}-cleanup.jsonl`;
+            const cleanupFilePath = path.join(resultsDir, cleanupFileName);
+            
+            // Ensure workerId is in the data
+            cleanupCall.workerId = this.workerId || '0';
+            
+            const cleanupLine = JSON.stringify(cleanupCall) + '\n';
+            fs.appendFileSync(cleanupFilePath, cleanupLine, { encoding: 'utf8' });
+            
+            logger.info(`✅ Worker ${this.workerId}: Cleanup call written to ${cleanupFilePath}`);
+        } catch (writeError) {
+            logger.error(`Failed to write cleanup call: ${writeError.message}`);
+        }
         
         // Make final attempt to fetch metadata if we don't have it
         if (!this.testMetadata) {
@@ -825,120 +1363,183 @@ class UrlTrackerPlugin extends EventEmitter {
         }
         
         // DEBUG: Check all conditions for API upload
-        logger.verbose(`=== API UPLOAD CONDITIONS CHECK ===`);
-        logger.verbose(`1. enableApiUpload: ${this.options.enableApiUpload}`);
-        logger.verbose(`2. apiUploader exists: ${!!this.apiUploader}`);
-        logger.verbose(`3. trackingResults.length > 0: ${this.trackingResults && this.trackingResults.length > 0}`);
-        logger.verbose(`4. All conditions met: ${this.options.enableApiUpload && this.apiUploader && this.trackingResults.length > 0}`);
+        logger.info(`=== API UPLOAD CONDITIONS CHECK ===`);
+        logger.info(`1. enableApiUpload: ${this.options.enableApiUpload}`);
+        logger.info(`2. apiUploader exists: ${!!this.apiUploader}`);
+        logger.info(`3. trackingResults.length > 0: ${this.trackingResults && this.trackingResults.length > 0}`);
+        logger.info(`4. All conditions met: ${this.options.enableApiUpload && this.apiUploader && this.trackingResults.length > 0}`);
+        logger.info(`5. Test name: "${this.options.testName}"`);
+        logger.info(`6. Worker ID: ${this.workerId}`);
+        logger.info(`7. Cleanup called flag: ${this.cleanupCalled}`);
         
-        // NEW: Upload tracking results to API before file export
-        if (this.options.enableApiUpload && this.apiUploader && this.trackingResults.length > 0) {
+        // CONDITIONAL: Only upload in cleanup if not already done in afterEach, page close, or auto upload
+        if (this.options.enableApiUpload && this.apiUploader && this.trackingResults.length > 0 && !this._uploadCompletedInAfterEach && !this._uploadCompletedInPageClose && !this._uploadCompleted) {
             try {
-                // REVOLUTIONARY APPROACH: Fire-and-forget API upload with optimistic tracking
-                logger.info(`[API] Starting API upload for "${this.options.testName}"`);
+                logger.info(`[API] Starting TRACKED API upload for "${this.options.testName}"`);
                 
-                // IMMEDIATELY mark as successful optimistically
-                if (!global._urlTrackerApiSuccesses) {
-                    global._urlTrackerApiSuccesses = [];
+                // Initialize upload tracking if not exists
+                if (!global._activeApiUploads) {
+                    global._activeApiUploads = new Map();
                 }
                 
                 // Validate tracking data immediately
                 const trackingData = { navigations: this.trackingResults };
-                logger.verbose(`[API FIRE-FORGET] Validating tracking data...`);
+                logger.info(`[API TRACKED] Validating tracking data...`);
+                
                 if (ApiUploader.validateTrackingData(trackingData, 'url-tracker')) {
+                    logger.info(`[API] Proceeding directly to upload (health checks removed for better performance)`);
+                    
+                    // Proceed directly to upload without any health checks or delays
+                    
                     // Extract test ID
                     const testId = ApiUploader.extractTestId(this.testMetadata, this.options);
                     logger.verbose(`[API] Using test ID: ${testId}`);
                     
-                    // OPTIMISTICALLY mark as successful BEFORE even starting upload
-                    const optimisticSuccess = {
+                    const uploadId = `${this.workerId}_${this.options.testName}_${Date.now()}`;
+                    
+                    // Create tracked upload promise with better error handling
+                    const uploadPromise = this.performTrackedApiUpload(trackingData, testId, uploadId);
+                    
+                    // Store in active uploads for tracking
+                    global._activeApiUploads.set(uploadId, {
                         testName: this.options.testName,
-                        testId: testId,
-                        timestamp: new Date().toISOString(),
-                        status: 'optimistic_start'
-                    };
-                    global._urlTrackerApiSuccesses.push(optimisticSuccess);
-                    logger.info(`[API] OPTIMISTIC success recorded for "${this.options.testName}"`);
-                    
-                    // Start upload in background without waiting
-                    const backgroundUpload = async () => {
-                        try {
-                            logger.info(`[API FIRE-FORGET] Background upload starting for "${this.options.testName}"`);
-                            const response = await this.apiUploader.uploadTrackingResults(trackingData, testId, {
-                                trackingType: 'url-tracker',
-                                framework: 'Playwright'
-                            });
-                            
-                            // Update the optimistic success with real success
-                            optimisticSuccess.status = 'confirmed_success';
-                            optimisticSuccess.response = response;
-                            logger.success(`[API FIRE-FORGET] Background upload CONFIRMED for "${this.options.testName}"`);
-                            
-                        } catch (error) {
-                            logger.error(`[API FIRE-FORGET] Background upload failed for "${this.options.testName}": ${error.message}`);
-                            
-                            // Remove the optimistic success and add to errors
-                            const successIndex = global._urlTrackerApiSuccesses.indexOf(optimisticSuccess);
-                            if (successIndex >= 0) {
-                                global._urlTrackerApiSuccesses.splice(successIndex, 1);
-                            }
-                            
-                            // Add to errors
-                            if (!global._urlTrackerApiErrors) {
-                                global._urlTrackerApiErrors = [];
-                            }
-                            global._urlTrackerApiErrors.push({
-                                testName: this.options.testName,
-                                error: error.message,
-                                timestamp: new Date().toISOString()
-                            });
-                            logger.info(`[API FIRE-FORGET] Error recorded for "${this.options.testName}"`);
-                        }
-                    };
-                    
-                    // Start the background upload without waiting
-                    backgroundUpload().catch(() => {
-                        // Already handled in the backgroundUpload function
+                        workerId: this.workerId,
+                        promise: uploadPromise,
+                        startTime: Date.now(),
+                        status: 'in_progress'
                     });
                     
-                    logger.info(`[API FIRE-FORGET] Background upload initiated for "${this.options.testName}" - cleanup continuing`);
+                    logger.info(`[API] Tracked upload initiated for "${this.options.testName}" (Upload ID: ${uploadId})`);
+                    
+                    // CRITICAL FIX: Use synchronous upload approach to prevent context closure interruption
+                    logger.info(`[API] Starting SYNCHRONOUS upload to prevent context closure interruption`);
+                    
+                    try {
+                        // Use setImmediate to ensure upload starts immediately in next tick
+                        const uploadResult = await new Promise((resolve, reject) => {
+                            setImmediate(async () => {
+                                try {
+                                    logger.info(`[API] Executing upload in immediate callback`);
+                                    const result = await uploadPromise;
+                                    resolve(result);
+                                } catch (error) {
+                                    reject(error);
+                                }
+                            });
+                            
+                            // Add a much shorter timeout for cleanup phase
+                            setTimeout(() => {
+                                reject(new Error('Upload timeout during cleanup'));
+                            }, 1500); // 1.5 seconds max for cleanup
+                        });
+                        
+                        // Upload completed successfully
+                        const upload = global._activeApiUploads.get(uploadId);
+                        if (upload) {
+                            upload.status = 'completed';
+                            upload.result = uploadResult;
+                            logger.success(`✅ [API] SYNCHRONOUS upload completed for "${this.options.testName}"`);
+                        }
+                        
+                    } catch (uploadError) {
+                        if (uploadError.message === 'Upload timeout during cleanup') {
+                            // This is expected during cleanup - context is closing
+                            logger.warn(`⏰ [API] Upload timeout during cleanup for "${this.options.testName}" - context closing`);
+                            
+                            // Try one more immediate attempt without waiting
+                            try {
+                                logger.info(`[API] Making final immediate upload attempt`);
+                                // Fire-and-forget final attempt
+                                uploadPromise.then(result => {
+                                    logger.success(`✅ [API] Final upload attempt succeeded for "${this.options.testName}"`);
+                                    const upload = global._activeApiUploads.get(uploadId);
+                                    if (upload) {
+                                        upload.status = 'completed_after_timeout';
+                                        upload.result = result;
+                                    }
+                                }).catch(finalError => {
+                                    logger.error(`❌ [API] Final upload attempt failed for "${this.options.testName}": ${finalError.message}`);
+                                    const upload = global._activeApiUploads.get(uploadId);
+                                    if (upload) {
+                                        upload.status = 'failed_after_timeout';
+                                        upload.error = finalError.message;
+                                    }
+                                });
+                            } catch (finalAttemptError) {
+                                logger.error(`❌ [API] Could not make final upload attempt: ${finalAttemptError.message}`);
+                            }
+                            
+                            // Mark as background operation
+                            const upload = global._activeApiUploads.get(uploadId);
+                            if (upload) {
+                                upload.status = 'background_after_cleanup';
+                                upload.note = 'Upload continuing in background after context closure';
+                            }
+                        } else {
+                            throw uploadError;
+                        }
+                    }
+                    
                 } else {
                     throw new Error('Invalid tracking data - cannot upload to API');
                 }
                 
             } catch (error) {
-                logger.error(`[API FIRE-FORGET] ERROR for "${this.options.testName}": ${error.message}`);
+                logger.error(`[API] TRACKED ERROR for "${this.options.testName}" (Worker ${this.workerId}): ${error.message}`);
                 
-                // Store the error for later reporting
-                if (!global._urlTrackerApiErrors) {
-                    global._urlTrackerApiErrors = [];
-                }
-                global._urlTrackerApiErrors.push({
+                // Store the error in worker-specific data
+                const errorRecord = {
                     testName: this.options.testName,
                     error: error.message,
-                    timestamp: new Date().toISOString()
-                });
-                logger.info(`[API FIRE-FORGET] ERROR stored for "${this.options.testName}"`);
+                    timestamp: new Date().toISOString(),
+                    workerId: this.workerId,
+                    type: 'tracked_error',
+                    stack: error.stack
+                };
+                global._workerData.apiErrors.push(errorRecord);
+                
+                // Write worker-specific error to file immediately
+                this.writeWorkerApiResult(errorRecord, 'error');
+                
+                logger.info(`[API] Tracked error stored for "${this.options.testName}" in worker ${this.workerId}`);
                 
                 // Continue with cleanup even if API upload fails
             }
         } else {
-            logger.warn(`[API FIRE-FORGET] SKIPPED for "${this.options.testName}":`);
-            logger.warn(`[API FIRE-FORGET]   - API upload enabled: ${this.options.enableApiUpload}`);
-            logger.warn(`[API FIRE-FORGET]   - API uploader exists: ${!!this.apiUploader}`);
-            logger.warn(`[API FIRE-FORGET]   - Tracking results count: ${this.trackingResults ? this.trackingResults.length : 0}`);
+            if (this._uploadCompletedInAfterEach) {
+                logger.info(`[API] SKIPPED for "${this.options.testName}" - upload already completed in afterEach`);
+            } else if (this._uploadCompletedInPageClose) {
+                logger.info(`[API] SKIPPED for "${this.options.testName}" - upload already completed in page close`);
+            } else if (this._uploadCompleted) {
+                logger.info(`[API] SKIPPED for "${this.options.testName}" - upload already completed by auto upload`);
+            } else {
+                logger.warn(`[API] SKIPPED for "${this.options.testName}" (Worker ${this.workerId}):`);
+                logger.warn(`[API]   - API upload enabled: ${this.options.enableApiUpload}`);
+                logger.warn(`[API]   - API uploader exists: ${!!this.apiUploader}`);
+                logger.warn(`[API]   - Tracking results count: ${this.trackingResults ? this.trackingResults.length : 0}`);
             
-            // Store the skip reason for debugging
-            if (!global._urlTrackerApiSkips) {
-                global._urlTrackerApiSkips = [];
+            // Debug credentials if API upload is enabled but uploader doesn't exist
+            if (this.options.enableApiUpload && !this.apiUploader) {
+                const username = this.options.username || process.env.LT_USERNAME;
+                const accessKey = this.options.accessKey || process.env.LT_ACCESS_KEY;
+                logger.warn(`[API]   - Username available: ${!!username}`);
+                logger.warn(`[API]   - Access key available: ${!!accessKey}`);
             }
-            global._urlTrackerApiSkips.push({
+            
+            // Store the skip reason in worker-specific data
+            const skipRecord = {
                 testName: this.options.testName,
                 reason: `enableApiUpload: ${this.options.enableApiUpload}, hasUploader: ${!!this.apiUploader}, resultsCount: ${this.trackingResults ? this.trackingResults.length : 0}`,
-                timestamp: new Date().toISOString()
-            });
+                timestamp: new Date().toISOString(),
+                workerId: this.workerId
+            };
+            global._workerData.apiSkips.push(skipRecord);
             
-            logger.info(`[API FIRE-FORGET] Skip recording completed for "${this.options.testName}"`);
+            // Write worker-specific skip to file immediately
+            this.writeWorkerApiResult(skipRecord, 'skip');
+            
+            logger.info(`[API] Skip recording completed for "${this.options.testName}" in worker ${this.workerId}`);
+            }
         }
         
         console.log(`[UrlTracker] === CLEANUP DEBUG END ===`);
@@ -947,42 +1548,82 @@ class UrlTrackerPlugin extends EventEmitter {
         // Before cleanup, export the results to file (existing functionality)
         this.exportResults();
         
-        // Generate Enhanced HTML report if available and we have tracking results
-        if (EnhancedHtmlReporter && this.trackingResults && this.trackingResults.length > 0) {
+        // CRITICAL: Store session data IMMEDIATELY before any API uploads to ensure it's preserved
+        if (this.trackingResults && this.trackingResults.length > 0) {
             try {
-                logger.info('Generating Enhanced HTML report for Playwright URL tracking...');
+                logger.info('IMMEDIATELY storing session data for final HTML report generation...');
                 
                 // Create session data format expected by EnhancedHtmlReporter
                 const sessionData = {
                     metadata: this.testMetadata || {},
                     navigations: this.trackingResults,
                     session_id: this.testMetadata?.session_id || this.testMetadata?.build_id || `session_${Date.now()}`,
-                    spec_file: this.options.specFile
+                    spec_file: this.options.specFile,
+                    test_name: this.options.testName,
+                    workerId: this.workerId
                 };
                 
-                // Create or get the global Enhanced HTML reporter
-                if (!globalHtmlReporter) {
-                    globalHtmlReporter = new EnhancedHtmlReporter({
-                        outputDir: 'test-results',
-                        title: 'LambdaTest Playwright URL Tracking Report',
-                        theme: 'dark', // Default to dark theme
-                        enableKeyboardShortcut: true,
-                        autoOpen: false, // We'll handle opening manually for better control
-                        enableSearch: true,
-                        enableFilters: true,
-                        showMetrics: true,
-                        showTimeline: true
-                    });
+                // CRITICAL: Write session data to worker file IMMEDIATELY (before API upload)
+                logger.info(`Writing session data immediately for "${this.options.testName}" with ${this.trackingResults.length} navigations`);
+                this.writeWorkerSessionData(sessionData);
+                
+                // Store session data in worker-specific storage
+                if (!global._workerData) {
+                    global._workerData = { sessions: [], apiSuccesses: [], apiErrors: [], apiSkips: [], cleanupCalls: [] };
+                }
+                global._workerData.sessions.push(sessionData);
+                
+                // Debug: Log session data details
+                logger.info(`Session data details for ${this.options.testName}:`);
+                logger.info(`  Session ID: ${sessionData.session_id}`);
+                logger.info(`  Test Name: ${sessionData.test_name || this.options.testName}`);
+                logger.info(`  Spec File: ${sessionData.spec_file}`);
+                logger.info(`  Worker ID: ${this.workerId}`);
+                logger.info(`  Worker sessions count: ${global._workerData.sessions.length}`);
+                
+                // Create or get the global Enhanced HTML reporter (ensure it's always available if EnhancedHtmlReporter exists)
+                if (EnhancedHtmlReporter && !globalHtmlReporter) {
+                    try {
+                        globalHtmlReporter = new EnhancedHtmlReporter({
+                            outputDir: 'test-results',
+                            title: 'Playwright URL Tracking Report',
+                            theme: 'dark', // Default to dark theme
+                            enableKeyboardShortcut: true,
+                            autoOpen: false, // We'll handle opening manually for better control
+                            enableSearch: true,
+                            enableFilters: true,
+                            showMetrics: true,
+                            showTimeline: true
+                        });
+                        logger.info('Enhanced HTML Reporter initialized successfully');
+                    } catch (reporterError) {
+                        logger.error(`Failed to initialize Enhanced HTML Reporter: ${reporterError.message}`);
+                        globalHtmlReporter = null;
+                    }
+                } else if (!EnhancedHtmlReporter) {
+                    logger.verbose('Enhanced HTML Reporter not available - install @lambdatest/sdk-utils for HTML reports');
                 }
                 
-                const htmlReportPath = globalHtmlReporter.generateReport([sessionData], 'playwright');
-                logger.success(`Enhanced HTML report generated: ${htmlReportPath}`);
-                
-                // REMOVED: Faulty last test detection that causes premature HTML report opening
-                // The HTML report will be shown only during global cleanup at the end of all tests
+                // FALLBACK: For non-fixture usage, generate report immediately if this appears to be the last test
+                // This handles cases where the global cleanup might not be called
+                if (!global._isUsingFixtureFramework) {
+                    // Set a timeout to generate the report if no more sessions are added soon
+                    clearTimeout(global._htmlReportTimeout);
+                    global._htmlReportTimeout = setTimeout(() => {
+                        try {
+                            if (globalHtmlReporter && global._urlTrackerSessions && global._urlTrackerSessions.length > 0) {
+                                logger.info(`Generating fallback HTML report with ${global._urlTrackerSessions.length} sessions...`);
+                                const htmlReportPath = globalHtmlReporter.generateReport(global._urlTrackerSessions, 'playwright');
+                                logger.success(`Fallback HTML report generated: ${htmlReportPath}`);
+                            }
+                        } catch (error) {
+                            logger.error('Error generating fallback HTML report:', error);
+                        }
+                    }, 5000); // Wait 5 seconds before generating fallback report
+                }
                 
             } catch (htmlError) {
-                logger.error(`Failed to generate HTML report: ${htmlError.message}`);
+                logger.error(`Failed to store session data: ${htmlError.message}`);
             }
         }
         
@@ -1381,6 +2022,11 @@ class UrlTrackerPlugin extends EventEmitter {
         // Add the result to the array
         this.trackingResults.push(finalResult);
         
+        // Update last navigation time for auto upload detection
+        if (this.options.autoUploadOnTestEnd) {
+            this.lastNavigationTime = Date.now();
+        }
+        
         // Log the navigation event
         logger.navigation(`${finalResult.previous_url} → ${finalResult.current_url} (${navigation_type})`);
         
@@ -1554,11 +2200,40 @@ class UrlTrackerPlugin extends EventEmitter {
         // Add this instance to the registry
         global._urlTrackerRegistry.trackers.set(this.instanceId, this);
         
-        // Setup page event listeners for automatic cleanup
+        // Setup page event listeners for automatic cleanup and CRITICAL API upload
         if (this.page) {
-            // Listen for page close event
+            // CRITICAL: Listen for page close event to upload BEFORE context closes
             this.page.once('close', async () => {
-                logger.info(`Page closed for test ${this.options.testName}, triggering automatic cleanup`);
+                logger.info(`Page closed for test ${this.options.testName}, triggering IMMEDIATE API upload and cleanup`);
+                
+                // IMMEDIATE API upload BEFORE any other cleanup
+                if (this.options.enableApiUpload && this.apiUploader && this.trackingResults.length > 0 && !this._uploadCompletedInPageClose) {
+                    try {
+                        logger.info(`PAGE CLOSE: Performing IMMEDIATE API upload for "${this.options.testName}"`);
+                        
+                        // Ensure metadata is available
+                        if (!this.testMetadata) {
+                            await this.fetchTestMetadataWithRetry();
+                        }
+                        
+                        const trackingData = { navigations: this.trackingResults };
+                        const testId = ApiUploader.extractTestId(this.testMetadata, this.options);
+                        const uploadId = `pageclose_${this.workerId}_${Date.now()}`;
+                        
+                        // Perform immediate upload with very short timeout
+                        const result = await Promise.race([
+                            this.performTrackedApiUpload(trackingData, testId, uploadId),
+                            new Promise((_, reject) => setTimeout(() => reject(new Error('Page close upload timeout')), 1000))
+                        ]);
+                        
+                        logger.success(`✅ PAGE CLOSE: API upload completed for "${this.options.testName}"`);
+                        this._uploadCompletedInPageClose = true;
+                        
+                    } catch (uploadError) {
+                        logger.error(`❌ PAGE CLOSE: Upload failed for "${this.options.testName}": ${uploadError.message}`);
+                    }
+                }
+                
                 await this.performAutoCleanup();
             });
             
@@ -1704,6 +2379,184 @@ class UrlTrackerPlugin extends EventEmitter {
         logger.verbose('Global URL tracker cleanup handlers registered successfully');
     }
     
+    // NEW METHOD: Setup automatic test end detection for upload
+    setupTestEndDetection() {
+        try {
+            logger.info(`Setting up automatic test end detection for: ${this.options.testName}`);
+            
+            // Method 1: Monitor page navigation patterns to detect test completion
+            this.setupNavigationBasedDetection();
+            
+            // Method 2: Use timeout-based detection as fallback
+            this.setupTimeoutBasedDetection();
+            
+            // Method 3: Monitor for test completion signals
+            this.setupTestCompletionSignals();
+            
+        } catch (error) {
+            logger.error(`Error setting up test end detection: ${error.message}`);
+        }
+    }
+    
+    // NEW METHOD: Navigation-based test completion detection
+    setupNavigationBasedDetection() {
+        // Monitor for periods of navigation inactivity that suggest test completion
+        this.lastNavigationTime = Date.now();
+        this.navigationInactivityThreshold = 3000; // 3 seconds of no navigation
+        
+        // Set up interval to check for navigation inactivity
+        this.navigationMonitor = setInterval(async () => {
+            const timeSinceLastNavigation = Date.now() - this.lastNavigationTime;
+            
+            if (timeSinceLastNavigation > this.navigationInactivityThreshold && 
+                !this._uploadCompleted && 
+                this.trackingResults.length > 0) {
+                
+                logger.info(`🔍 Navigation inactivity detected (${timeSinceLastNavigation}ms) - triggering auto upload`);
+                await this.performAutoUpload('navigation_inactivity');
+            }
+        }, 1000); // Check every second
+    }
+    
+    // NEW METHOD: Timeout-based test completion detection
+    setupTimeoutBasedDetection() {
+        // Set a reasonable timeout for test completion (fallback)
+        this.testCompletionTimeout = setTimeout(async () => {
+            if (!this._uploadCompleted && this.trackingResults.length > 0) {
+                logger.info(`⏰ Test timeout reached - triggering auto upload for: ${this.options.testName}`);
+                await this.performAutoUpload('timeout_based');
+            }
+        }, 30000); // 30 seconds max per test
+    }
+    
+    // NEW METHOD: Monitor for test completion signals
+    setupTestCompletionSignals() {
+        if (this.page) {
+            // Monitor for console messages that might indicate test completion
+            this.page.on('console', (msg) => {
+                const text = msg.text().toLowerCase();
+                if (text.includes('test complete') || text.includes('test finished') || text.includes('test done')) {
+                    if (!this._uploadCompleted) {
+                        logger.info(`📢 Test completion signal detected - triggering auto upload`);
+                        this.performAutoUpload('console_signal').catch(e => 
+                            logger.error(`Auto upload failed: ${e.message}`)
+                        );
+                    }
+                }
+            });
+        }
+    }
+    
+    // NEW METHOD: Perform automatic upload when test end is detected
+    async performAutoUpload(trigger) {
+        if (this._uploadCompleted || this._uploadInProgress) {
+            logger.verbose(`Auto upload skipped - already completed or in progress`);
+            return; // Already uploaded or in progress
+        }
+        
+        this._uploadInProgress = true;
+        const startTime = Date.now();
+        
+        try {
+            logger.info(`🚀 AUTO UPLOAD: Triggered by ${trigger} for "${this.options.testName}"`);
+            
+            if (!this.options.enableApiUpload || !this.apiUploader || this.trackingResults.length === 0) {
+                logger.info(`AUTO UPLOAD: Skipped - conditions not met (enableApiUpload: ${this.options.enableApiUpload}, hasUploader: ${!!this.apiUploader}, results: ${this.trackingResults.length})`);
+                return;
+            }
+            
+            // Ensure metadata is available
+            if (!this.testMetadata) {
+                await this.fetchTestMetadataWithRetry();
+            }
+            
+            const trackingData = { navigations: this.trackingResults };
+            const testId = ApiUploader.extractTestId(this.testMetadata, this.options);
+            const uploadId = `auto_${trigger}_${this.workerId}_${Date.now()}`;
+            
+            logger.info(`AUTO UPLOAD: Starting upload with ${trackingData.navigations.length} navigations`);
+            
+            // Perform immediate upload without timeout
+            const result = await this.apiUploader.uploadTrackingResults(trackingData, testId, {
+                trackingType: 'url-tracker',
+                framework: 'Playwright',
+                uploadId: uploadId,
+                workerId: this.workerId,
+                trigger: trigger,
+                autoUpload: true
+            });
+            
+            logger.success(`✅ AUTO UPLOAD: Completed successfully for "${this.options.testName}" (trigger: ${trigger})`);
+            this._uploadCompleted = true;
+            
+            // CRITICAL: Record successful auto upload in worker files
+            const successRecord = {
+                testName: this.options.testName,
+                testId: testId,
+                uploadId: uploadId,
+                timestamp: new Date().toISOString(),
+                status: 'auto_upload_success',
+                response: result,
+                workerId: this.workerId,
+                navigationCount: trackingData.navigations.length,
+                                 trigger: trigger,
+                 duration: Date.now() - startTime
+            };
+            
+            try {
+                this.writeWorkerApiResult(successRecord, 'success');
+                logger.info(`✅ AUTO UPLOAD: Success recorded for "${this.options.testName}"`);
+            } catch (writeError) {
+                logger.error(`❌ AUTO UPLOAD: Failed to record success: ${writeError.message}`);
+            }
+            
+            // Clear detection timers since upload is complete
+            this.clearTestEndDetection();
+            
+            return result;
+            
+        } catch (error) {
+            logger.error(`❌ AUTO UPLOAD: Failed for "${this.options.testName}" (trigger: ${trigger}): ${error.message}`);
+            
+            // CRITICAL: Record failed auto upload in worker files
+            const errorRecord = {
+                testName: this.options.testName,
+                uploadId: uploadId || `auto_${trigger}_${this.workerId}_${Date.now()}`,
+                error: error.message,
+                errorType: error.constructor.name,
+                timestamp: new Date().toISOString(),
+                workerId: this.workerId,
+                trigger: trigger,
+                type: 'auto_upload_error',
+                stack: error.stack
+            };
+            
+            try {
+                this.writeWorkerApiResult(errorRecord, 'error');
+                logger.info(`❌ AUTO UPLOAD: Error recorded for "${this.options.testName}"`);
+            } catch (writeError) {
+                logger.error(`❌ AUTO UPLOAD: Failed to record error: ${writeError.message}`);
+            }
+            
+            throw error;
+        } finally {
+            this._uploadInProgress = false;
+        }
+    }
+    
+    // NEW METHOD: Clear test end detection timers
+    clearTestEndDetection() {
+        if (this.navigationMonitor) {
+            clearInterval(this.navigationMonitor);
+            this.navigationMonitor = null;
+        }
+        
+        if (this.testCompletionTimeout) {
+            clearTimeout(this.testCompletionTimeout);
+            this.testCompletionTimeout = null;
+        }
+    }
+    
     // NEW METHOD: Perform automatic cleanup
     async performAutoCleanup() {
         if (this.cleanupCalled) {
@@ -1712,6 +2565,10 @@ class UrlTrackerPlugin extends EventEmitter {
         
         try {
             logger.info(`Performing automatic cleanup for URL tracker: ${this.options.testName}`);
+            
+            // Clear test end detection first
+            this.clearTestEndDetection();
+            
             await this.cleanup();
             
             // Remove from global registry
@@ -1999,6 +2856,9 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
     } else {
         logger.verbose('Global URL tracker registry already exists');
     }
+    
+    // Mark that we're using the fixture framework
+    global._isUsingFixtureFramework = true;
 
     // Register global cleanup handlers only once
     if (!global._urlTrackerRegistry.cleanupHandlersRegistered) {
@@ -2010,10 +2870,22 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
         
         // Process exit handler - synchronous, no async operations allowed
         process.on('exit', () => {
-            logger.info('Process exit detected - performing synchronous cleanup');
+            logger.info('Process exit detected - performing coordinated cleanup with active upload tracking');
             try {
-                // SIMPLIFIED: With fire-and-forget approach, no need to check active uploads
-                logger.info('Fire-and-forget API uploads may still be running in background - this is expected');
+                // Check for active uploads before exiting
+                const activeUploads = global._activeApiUploads ? global._activeApiUploads.size : 0;
+                if (activeUploads > 0) {
+                    logger.warn(`⚠️  PROCESS EXIT: ${activeUploads} API uploads still active - some data may be lost`);
+                    logger.warn('Consider increasing cleanup wait time or using process coordination');
+                    
+                    // Log details of active uploads
+                    if (global._activeApiUploads) {
+                        for (const [uploadId, upload] of global._activeApiUploads) {
+                            const duration = Date.now() - upload.startTime;
+                            logger.warn(`  Active upload: ${uploadId} (${upload.testName}, ${duration}ms elapsed, status: ${upload.status})`);
+                        }
+                    }
+                }
                 
                 // Only do synchronous operations here
                 const registry = global._urlTrackerRegistry;
@@ -2025,11 +2897,94 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
                     });
                 }
                 
-                // Generate API Upload Report (synchronous only)
+                // CRITICAL: Generate final HTML report with aggregated sessions from all workers
                 try {
-                    generateApiUploadReport();
+                    const aggregatedSessions = aggregateWorkerSessions();
+                    
+                    logger.info(`HTML Report Debug: EnhancedHtmlReporter available: ${!!EnhancedHtmlReporter}`);
+                    logger.info(`HTML Report Debug: Aggregated sessions count: ${aggregatedSessions.length}`);
+                    
+                    if (EnhancedHtmlReporter && aggregatedSessions.length > 0) {
+                        logger.info(`PROCESS EXIT: Generating final HTML report with ${aggregatedSessions.length} aggregated sessions...`);
+                        
+                        // Create reporter if needed
+                        if (!globalHtmlReporter) {
+                            logger.info(`Creating new EnhancedHtmlReporter instance...`);
+                            globalHtmlReporter = new EnhancedHtmlReporter({
+                                outputDir: 'test-results',
+                                title: 'LambdaTest Playwright URL Tracking Report (Multi-Worker)',
+                                theme: 'dark',
+                                enableKeyboardShortcut: true,
+                                autoOpen: true, // Enable auto-open for better UX
+                                enableSearch: true,
+                                enableFilters: true,
+                                showMetrics: true,
+                                showTimeline: true
+                            });
+                            logger.info(`EnhancedHtmlReporter instance created successfully`);
+                        }
+                        
+                        // Generate the final report with all aggregated sessions
+                        logger.info(`Calling generateReport with ${aggregatedSessions.length} sessions...`);
+                        const htmlReportPath = globalHtmlReporter.generateReport(aggregatedSessions, 'playwright');
+                        logger.success(`PROCESS EXIT: Final HTML report generated with ${aggregatedSessions.length} sessions: ${htmlReportPath}`);
+                        
+                        // Show the HTML report prompt
+                        showHtmlReportPrompt(globalHtmlReporter, htmlReportPath);
+                    } else if (!EnhancedHtmlReporter) {
+                        logger.warn('PROCESS EXIT: EnhancedHtmlReporter not available - generating basic HTML report');
+                        // Generate a basic HTML report as fallback
+                        try {
+                            if (aggregatedSessions.length > 0) {
+                                generateBasicHtmlReport(aggregatedSessions);
+                            } else {
+                                logger.info('PROCESS EXIT: No sessions for basic HTML report either');
+                            }
+                        } catch (basicError) {
+                            logger.error('PROCESS EXIT: Basic HTML report generation also failed:', basicError.message);
+                        }
+                    } else if (aggregatedSessions.length === 0) {
+                        logger.info('PROCESS EXIT: No sessions found for HTML report generation');
+                        
+                        // Debug: Check what session files exist
+                        try {
+                            const workersDir = path.join(process.cwd(), 'test-results', 'workers');
+                            if (fs.existsSync(workersDir)) {
+                                const sessionFiles = fs.readdirSync(workersDir).filter(f => f.includes('sessions'));
+                                logger.info(`Found ${sessionFiles.length} session files: ${sessionFiles.join(', ')}`);
+                                
+                                // Try to read first session file for debugging
+                                if (sessionFiles.length > 0) {
+                                    const firstSessionFile = path.join(workersDir, sessionFiles[0]);
+                                    const content = fs.readFileSync(firstSessionFile, 'utf-8');
+                                    const lines = content.trim().split('\n').filter(line => line.trim());
+                                    logger.info(`First session file has ${lines.length} lines`);
+                                    if (lines.length > 0) {
+                                        try {
+                                            const firstSession = JSON.parse(lines[0]);
+                                            logger.info(`Sample session: ${JSON.stringify(firstSession, null, 2).substring(0, 200)}...`);
+                                        } catch (parseError) {
+                                            logger.error(`Error parsing first session: ${parseError.message}`);
+                                        }
+                                    }
+                                }
+                            } else {
+                                logger.info('No workers directory found');
+                            }
+                        } catch (debugError) {
+                            logger.error(`Error checking session files: ${debugError.message}`);
+                        }
+                    }
+                } catch (htmlError) {
+                    logger.error('PROCESS EXIT: Error generating final HTML report:', htmlError);
+                    logger.error('HTML Error stack:', htmlError.stack);
+                }
+                
+                // Generate API Upload Report with active upload awareness
+                try {
+                    generateApiUploadReportWithCoordination();
                 } catch (reportError) {
-                    logger.error('Error generating API upload report:', reportError);
+                    logger.error('Error generating coordinated API upload report:', reportError);
                 }
                 
             } catch (e) {
@@ -2037,11 +2992,33 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
             }
         });
 
-        // SIGINT handler (Ctrl+C) - SYNCHRONOUS for reliability
-        process.on('SIGINT', () => {
-            logger.info('SIGINT received - performing IMMEDIATE synchronous cleanup');
+        // SIGINT handler (Ctrl+C) - IMPROVED with upload coordination
+        process.on('SIGINT', async () => {
+            logger.info('SIGINT received - performing COORDINATED cleanup with upload awareness');
             try {
-                // Force immediate cleanup without waiting
+                // Check active uploads first
+                const activeUploads = global._activeApiUploads ? global._activeApiUploads.size : 0;
+                if (activeUploads > 0) {
+                    logger.info(`SIGINT: Found ${activeUploads} active API uploads - waiting briefly for completion`);
+                    
+                    // Wait for a short time for uploads to complete
+                    const waitTime = 5000; // 5 seconds
+                    const startWait = Date.now();
+                    
+                    while ((Date.now() - startWait) < waitTime && global._activeApiUploads && global._activeApiUploads.size > 0) {
+                        logger.info(`SIGINT: Waiting for ${global._activeApiUploads.size} uploads... (${Math.ceil((waitTime - (Date.now() - startWait)) / 1000)}s remaining)`);
+                        await new Promise(resolve => setTimeout(resolve, 1000));
+                    }
+                    
+                    const remainingUploads = global._activeApiUploads ? global._activeApiUploads.size : 0;
+                    if (remainingUploads > 0) {
+                        logger.warn(`SIGINT: ${remainingUploads} uploads still active after ${waitTime}ms - proceeding with exit`);
+                    } else {
+                        logger.success('SIGINT: All uploads completed successfully');
+                    }
+                }
+                
+                // Force immediate cleanup of trackers
                 const registry = global._urlTrackerRegistry;
                 if (registry && registry.trackers && registry.trackers.size > 0) {
                     logger.info(`SIGINT: Found ${registry.trackers.size} pending trackers - forcing immediate export`);
@@ -2054,21 +3031,40 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
                     }
                 }
                 
-                // SIMPLIFIED: With fire-and-forget approach, uploads continue in background
-                logger.info('SIGINT: Fire-and-forget API uploads may continue in background');
-                
-                generateApiUploadReport();
+                generateApiUploadReportWithCoordination();
             } catch (e) {
                 logger.error('Error during SIGINT cleanup:', e);
             }
             process.exit(0);
         });
 
-        // SIGTERM handler (process termination) - SYNCHRONOUS for reliability
-        process.on('SIGTERM', () => {
-            logger.info('SIGTERM received - performing IMMEDIATE synchronous cleanup');
+        // SIGTERM handler (process termination) - IMPROVED with upload coordination
+        process.on('SIGTERM', async () => {
+            logger.info('SIGTERM received - performing COORDINATED cleanup with upload awareness');
             try {
-                // Force immediate cleanup without waiting
+                // Check active uploads first
+                const activeUploads = global._activeApiUploads ? global._activeApiUploads.size : 0;
+                if (activeUploads > 0) {
+                    logger.info(`SIGTERM: Found ${activeUploads} active API uploads - waiting briefly for completion`);
+                    
+                    // Wait for a shorter time for uploads to complete (SIGTERM is more urgent)
+                    const waitTime = 3000; // 3 seconds
+                    const startWait = Date.now();
+                    
+                    while ((Date.now() - startWait) < waitTime && global._activeApiUploads && global._activeApiUploads.size > 0) {
+                        logger.info(`SIGTERM: Waiting for ${global._activeApiUploads.size} uploads... (${Math.ceil((waitTime - (Date.now() - startWait)) / 1000)}s remaining)`);
+                        await new Promise(resolve => setTimeout(resolve, 500));
+                    }
+                    
+                    const remainingUploads = global._activeApiUploads ? global._activeApiUploads.size : 0;
+                    if (remainingUploads > 0) {
+                        logger.warn(`SIGTERM: ${remainingUploads} uploads still active after ${waitTime}ms - proceeding with exit`);
+                    } else {
+                        logger.success('SIGTERM: All uploads completed successfully');
+                    }
+                }
+                
+                // Force immediate cleanup of trackers
                 const registry = global._urlTrackerRegistry;
                 if (registry && registry.trackers && registry.trackers.size > 0) {
                     logger.info(`SIGTERM: Found ${registry.trackers.size} pending trackers - forcing immediate export`);
@@ -2081,10 +3077,7 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
                     }
                 }
                 
-                // SIMPLIFIED: With fire-and-forget approach, uploads continue in background
-                logger.info('SIGTERM: Fire-and-forget API uploads may continue in background');
-                
-                generateApiUploadReport();
+                generateApiUploadReportWithCoordination();
             } catch (e) {
                 logger.error('Error during SIGTERM cleanup:', e);
             }
@@ -2179,39 +3172,85 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
 
     return {
         // Add a worker-scoped fixture to handle cleanup at worker level
-        workerUrlTracker: [async ({}, use) => {
+        workerUrlTracker: [async ({}, use, workerInfo) => {
             // This runs once per worker - setup
-            logger.info('WORKER: URL tracker worker fixture starting');
+            const workerId = workerInfo.parallelIndex.toString(); // Use parallelIndex (0-based) for consistency
+            logger.info(`WORKER ${workerId}: URL tracker worker fixture starting`);
+            logger.verbose(`WORKER ${workerId}: Worker index: ${workerInfo.workerIndex}, Parallel index: ${workerInfo.parallelIndex}`);
+            
+            // Set environment variables for this worker
+            process.env.TEST_PARALLEL_INDEX = workerInfo.parallelIndex.toString();
+            process.env.TEST_WORKER_INDEX = workerInfo.workerIndex.toString();
             
             // Store cleanup functions for this worker
             if (!global._workerCleanupFunctions) {
                 global._workerCleanupFunctions = new Set();
             }
             
+            // Initialize worker-specific directories
+            const workersDir = path.join(process.cwd(), 'test-results', 'workers');
+            if (!fs.existsSync(workersDir)) {
+                fs.mkdirSync(workersDir, { recursive: true, mode: 0o777 });
+                logger.verbose(`WORKER ${workerId}: Created workers directory: ${workersDir}`);
+            }
+            
+            // Initialize worker-specific data storage
+            if (!global._workerData) {
+                global._workerData = {
+                    workerId: workerId,
+                    sessions: [],
+                    apiSuccesses: [],
+                    apiErrors: [],
+                    apiSkips: [],
+                    cleanupCalls: []
+                };
+                logger.verbose(`WORKER ${workerId}: Initialized worker data storage`);
+            }
+            
             await use();
             
             // This runs at worker teardown - MOST RELIABLE
-            logger.info('WORKER: URL tracker worker fixture cleanup starting');
+            logger.info(`WORKER ${workerId}: URL tracker worker fixture cleanup starting`);
             
             // Execute all cleanup functions for this worker
             if (global._workerCleanupFunctions && global._workerCleanupFunctions.size > 0) {
-                logger.info(`WORKER: Executing ${global._workerCleanupFunctions.size} cleanup functions`);
+                logger.info(`WORKER ${workerId}: Executing ${global._workerCleanupFunctions.size} cleanup functions`);
                 
                 for (const cleanupFn of global._workerCleanupFunctions) {
                     try {
                         await cleanupFn();
                     } catch (error) {
-                        logger.error(`WORKER: Error in cleanup function:`, error);
+                        logger.error(`WORKER ${workerId}: Error in cleanup function:`, error);
                     }
                 }
                 
                 global._workerCleanupFunctions.clear();
             }
             
-            // SIMPLIFIED: With fire-and-forget approach, no need to wait for uploads
-            logger.info('WORKER: Fire-and-forget API uploads may continue in background - this is expected');
+            // Write worker completion marker
+            try {
+                const completionFile = path.join(workersDir, `worker-${workerId}-completed.json`);
+                const completionData = {
+                    workerId: workerId,
+                    completedAt: new Date().toISOString(),
+                    testsRun: global._workerData ? global._workerData.sessions.length : 0,
+                    apiUploads: global._workerData ? global._workerData.apiSuccesses.length : 0,
+                    apiErrors: global._workerData ? global._workerData.apiErrors.length : 0
+                };
+                fs.writeFileSync(completionFile, JSON.stringify(completionData, null, 2));
+                logger.info(`WORKER ${workerId}: Completion marker written`);
+            } catch (error) {
+                logger.error(`WORKER ${workerId}: Error writing completion marker:`, error);
+            }
             
-            logger.info('WORKER: URL tracker worker fixture cleanup completed');
+            // IMPORTANT: Don't generate final HTML report at worker level
+            // This will be done by the main process after all workers complete
+            logger.info(`WORKER ${workerId}: Worker-specific cleanup completed`);
+            
+            // SIMPLIFIED: With fire-and-forget approach, no need to wait for uploads
+            logger.info(`WORKER ${workerId}: Fire-and-forget API uploads may continue in background - this is expected`);
+            
+            logger.info(`WORKER ${workerId}: URL tracker worker fixture cleanup completed`);
         }, { scope: 'worker', auto: true }],
         
         // Setup a handler that will be executed before each test
@@ -2238,6 +3277,14 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
                     // Ignore filesystem errors
                     logger.verbose(`Project testDir detection failed: ${fsError.message}`);
                 }
+            }
+            
+            // Set worker environment variables for consistent worker ID detection
+            if (testInfo && testInfo.parallelIndex !== undefined) {
+                process.env.TEST_PARALLEL_INDEX = testInfo.parallelIndex.toString();
+            }
+            if (testInfo && testInfo.workerIndex !== undefined) {
+                process.env.TEST_WORKER_INDEX = testInfo.workerIndex.toString();
             }
             
             const urlTracker = new UrlTrackerPlugin(page, {
@@ -2293,6 +3340,34 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
             // Store the critical cleanup function for afterEach
             testInfo._criticalCleanup = criticalCleanupFunction;
             
+            // Add upload function to testInfo for manual triggering during test
+            testInfo.uploadUrlTracking = async () => {
+                if (urlTracker && urlTracker.options.enableApiUpload && urlTracker.apiUploader && urlTracker.trackingResults.length > 0) {
+                    logger.info(`Manual upload triggered for test: ${testName}`);
+                    
+                    try {
+                        if (!urlTracker.testMetadata) {
+                            await urlTracker.fetchTestMetadataWithRetry();
+                        }
+                        
+                        const trackingData = { navigations: urlTracker.trackingResults };
+                        const testId = ApiUploader.extractTestId(urlTracker.testMetadata, urlTracker.options);
+                        const uploadId = `manual_${urlTracker.workerId}_${Date.now()}`;
+                        
+                        const result = await urlTracker.performTrackedApiUpload(trackingData, testId, uploadId);
+                        logger.success(`✅ Manual upload completed for test: ${testName}`);
+                        return result;
+                        
+                    } catch (error) {
+                        logger.error(`❌ Manual upload failed for test ${testName}: ${error.message}`);
+                        throw error;
+                    }
+                } else {
+                    logger.warn(`Manual upload skipped for test ${testName} - conditions not met`);
+                    return null;
+                }
+            };
+            
             // CRITICAL: Register cleanup with worker-scoped fixture (most reliable)
             if (global._workerCleanupFunctions) {
                 global._workerCleanupFunctions.add(criticalCleanupFunction);
@@ -2305,11 +3380,86 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
             const testName = testInfo.title || 'unknown';
             logger.info(`=== AFTEREACH STARTING FOR: ${testName} ===`);
             
-            // CRITICAL: Execute the cleanup function IMMEDIATELY
+            const urlTracker = testInfo.urlTracker;
+            
+            // AUTO UPLOAD: Check if auto upload completed successfully
+            if (urlTracker && urlTracker._uploadCompleted) {
+                logger.success(`✅ AFTEREACH: Auto upload already completed for: ${testName}`);
+            } else if (urlTracker && urlTracker.options.autoUploadOnTestEnd) {
+                logger.info(`AFTEREACH: Auto upload detection is active for: ${testName}`);
+            }
+            
+            // CRITICAL: Update session data with actual Playwright test status
+            if (urlTracker && global._urlTrackerSessions) {
+                try {
+                    // Find the session for this test and update its status
+                    const normalizedTestName = testName.toLowerCase().replace(/\s+/g, '_');
+                    const sessionIndex = global._urlTrackerSessions.findIndex(session => {
+                        const sessionTestName = (session.test_name || '').toLowerCase().replace(/\s+/g, '_');
+                        const sessionOriginalName = session.metadata?.data?.name || '';
+                        
+                        return session.test_name === testName || 
+                               sessionTestName === normalizedTestName ||
+                               sessionOriginalName.includes(testName) ||
+                               session.session_id.includes(normalizedTestName);
+                    });
+                    
+                    if (sessionIndex >= 0) {
+                        // Get actual Playwright test status
+                        const playwrightStatus = testInfo.status || 'unknown';
+                        const oldStatus = global._urlTrackerSessions[sessionIndex].status;
+                        
+                        global._urlTrackerSessions[sessionIndex].status = playwrightStatus;
+                        global._urlTrackerSessions[sessionIndex].playwrightStatus = playwrightStatus;
+                        
+                        // Also store error information if test failed
+                        if (playwrightStatus === 'failed' && testInfo.error) {
+                            global._urlTrackerSessions[sessionIndex].error = {
+                                message: testInfo.error.message,
+                                stack: testInfo.error.stack
+                            };
+                        }
+                        
+                        // Store additional test metadata
+                        global._urlTrackerSessions[sessionIndex].duration = testInfo.duration;
+                        global._urlTrackerSessions[sessionIndex].startTime = testInfo.startTime;
+                        global._urlTrackerSessions[sessionIndex].timeout = testInfo.timeout;
+                        
+                        logger.info(`AFTEREACH: Updated session status from '${oldStatus}' to '${playwrightStatus}' for test: ${testName}`);
+                    } else {
+                        logger.warn(`AFTEREACH: Could not find session to update status for test: ${testName}`);
+                    }
+                } catch (statusError) {
+                    logger.error(`AFTEREACH: Error updating test status:`, statusError);
+                }
+            }
+            
+            // CRITICAL: Execute the cleanup function IMMEDIATELY but wait for uploads
             if (testInfo._criticalCleanup && typeof testInfo._criticalCleanup === 'function') {
                 logger.info(`AFTEREACH: Executing CRITICAL cleanup for: ${testName}`);
                 try {
+                    // Execute cleanup and wait for any API uploads it initiates
                     await testInfo._criticalCleanup();
+                    
+                    // After cleanup, wait a bit more for any uploads that were started
+                    if (global._activeApiUploads && global._activeApiUploads.size > 0) {
+                        logger.info(`AFTEREACH: Cleanup completed, but ${global._activeApiUploads.size} uploads still active - waiting`);
+                        
+                        const postCleanupWait = 2000; // 2 seconds post-cleanup wait
+                        const postStartWait = Date.now();
+                        
+                        while ((Date.now() - postStartWait) < postCleanupWait && global._activeApiUploads.size > 0) {
+                            await new Promise(resolve => setTimeout(resolve, 50)); // Check every 50ms
+                        }
+                        
+                        const finalActiveUploads = global._activeApiUploads.size;
+                        if (finalActiveUploads > 0) {
+                            logger.warn(`AFTEREACH: ${finalActiveUploads} uploads still active after post-cleanup wait`);
+                        } else {
+                            logger.success(`AFTEREACH: All uploads completed after cleanup`);
+                        }
+                    }
+                    
                     logger.info(`AFTEREACH: CRITICAL cleanup completed for: ${testName}`);
                 } catch (cleanupError) {
                     logger.error(`AFTEREACH: Error in CRITICAL cleanup for ${testName}:`, cleanupError);
@@ -2318,9 +3468,8 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
                 logger.warn(`AFTEREACH: No critical cleanup function found for: ${testName}`);
             }
             
-            // Get the URL tracker reference
-            const urlTracker = testInfo.urlTracker;
             if (urlTracker) {
+                
                 // Try to record final navigation state if we haven't already
                 try {
                     const url = page.url();
@@ -2364,29 +3513,242 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
 };
 
 /**
- * Generate a comprehensive API upload report
- * This function checks all API upload attempts and reports success/failure
+ * Aggregate API results from all worker files
+ * This function reads all worker-specific JSONL files and combines the data
+ */
+function aggregateWorkerApiResults() {
+    const apiErrors = [];
+    const apiSuccesses = [];
+    const apiSkips = [];
+    const cleanupCalls = [];
+    let workersFound = 0;
+    let filesProcessed = 0;
+    
+    try {
+        const workersDir = path.join(process.cwd(), 'test-results', 'workers');
+        
+        logger.verbose(`Looking for workers directory: ${workersDir}`);
+        
+        if (!fs.existsSync(workersDir)) {
+            logger.verbose('No workers directory found, returning empty aggregation');
+            return { apiErrors, apiSuccesses, apiSkips, cleanupCalls, workersFound, filesProcessed };
+        }
+        
+        const workerFiles = fs.readdirSync(workersDir);
+        const workerIds = new Set();
+        
+        logger.verbose(`Found ${workerFiles.length} files in workers directory: ${workerFiles.join(', ')}`);
+        
+        // Debug: List all files found
+        workerFiles.forEach(file => {
+            const filePath = path.join(workersDir, file);
+            const stats = fs.statSync(filePath);
+            logger.verbose(`  ${file}: ${stats.size} bytes, modified: ${stats.mtime}`);
+        });
+        
+        // Process all worker API result files
+        for (const file of workerFiles) {
+            if (file.startsWith('worker-') && file.endsWith('.jsonl')) {
+                filesProcessed++;
+                const filePath = path.join(workersDir, file);
+                
+                // Extract worker ID from filename
+                const workerIdMatch = file.match(/worker-(\d+)-/);
+                const fileWorkerId = workerIdMatch ? workerIdMatch[1] : 'unknown';
+                
+                logger.verbose(`Processing worker file: ${file} (Worker ID: ${fileWorkerId})`);
+                
+                try {
+                    const content = fs.readFileSync(filePath, 'utf-8');
+                    const lines = content.trim().split('\n').filter(line => line.trim());
+                    
+                    logger.verbose(`  File content: ${lines.length} lines`);
+                    
+                    if (lines.length === 0) {
+                        logger.verbose(`  File is empty: ${file}`);
+                        continue;
+                    }
+                    
+                    // Add this worker ID to the set regardless of content
+                    workerIds.add(fileWorkerId);
+                    
+                    for (const line of lines) {
+                        try {
+                            const data = JSON.parse(line);
+                            
+                            // Ensure workerId is set from filename if not in data
+                            if (!data.workerId) {
+                                data.workerId = fileWorkerId;
+                            }
+                            
+                            logger.verbose(`  Parsed data: ${JSON.stringify(data).substring(0, 100)}...`);
+                            
+                            // Categorize based on file type
+                            if (file.includes('api-success')) {
+                                apiSuccesses.push(data);
+                                logger.verbose(`  Added to apiSuccesses`);
+                            } else if (file.includes('api-error')) {
+                                apiErrors.push(data);
+                                logger.verbose(`  Added to apiErrors`);
+                            } else if (file.includes('api-skip')) {
+                                apiSkips.push(data);
+                                logger.verbose(`  Added to apiSkips`);
+                            }
+                        } catch (parseError) {
+                            logger.verbose(`Error parsing line in ${file}: ${parseError.message}`);
+                            logger.verbose(`Problematic line: ${line}`);
+                        }
+                    }
+                } catch (readError) {
+                    logger.error(`Error reading worker file ${file}: ${readError.message}`);
+                }
+            } else {
+                logger.verbose(`Skipping non-worker file: ${file}`);
+            }
+        }
+        
+        // Also try to get cleanup calls from worker data if available
+        if (global._workerData && global._workerData.cleanupCalls) {
+            cleanupCalls.push(...global._workerData.cleanupCalls);
+        }
+        
+        // Also read cleanup files
+        for (const file of workerFiles) {
+            if (file.startsWith('worker-') && file.includes('cleanup') && file.endsWith('.jsonl')) {
+                const filePath = path.join(workersDir, file);
+                const workerIdMatch = file.match(/worker-(\d+)-/);
+                const fileWorkerId = workerIdMatch ? workerIdMatch[1] : 'unknown';
+                
+                logger.verbose(`Processing cleanup file: ${file} (Worker ID: ${fileWorkerId})`);
+                
+                try {
+                    const content = fs.readFileSync(filePath, 'utf-8');
+                    const lines = content.trim().split('\n').filter(line => line.trim());
+                    
+                    for (const line of lines) {
+                        try {
+                            const data = JSON.parse(line);
+                            if (!data.workerId) {
+                                data.workerId = fileWorkerId;
+                            }
+                            cleanupCalls.push(data);
+                            logger.verbose(`  Added cleanup call from file: ${data.testName}`);
+                        } catch (parseError) {
+                            logger.verbose(`Error parsing cleanup line in ${file}: ${parseError.message}`);
+                        }
+                    }
+                } catch (readError) {
+                    logger.error(`Error reading cleanup file ${file}: ${readError.message}`);
+                }
+            }
+        }
+        
+        workersFound = workerIds.size;
+        
+        logger.verbose(`Aggregation complete: ${workersFound} workers, ${filesProcessed} files, ${apiSuccesses.length} successes, ${apiErrors.length} errors, ${apiSkips.length} skips`);
+        
+    } catch (error) {
+        logger.error(`Error during API results aggregation: ${error.message}`);
+    }
+    
+    return { apiErrors, apiSuccesses, apiSkips, cleanupCalls, workersFound, filesProcessed };
+}
+
+/**
+ * Aggregate session data from all worker files
+ * This function reads all worker-specific session JSONL files and combines the data
+ */
+function aggregateWorkerSessions() {
+    const sessions = [];
+    
+    try {
+        const workersDir = path.join(process.cwd(), 'test-results', 'workers');
+        
+        logger.info(`SESSION AGGREGATION: Looking for workers directory: ${workersDir}`);
+        
+        if (!fs.existsSync(workersDir)) {
+            logger.info('SESSION AGGREGATION: No workers directory found for session aggregation');
+            return sessions;
+        }
+        
+        const workerFiles = fs.readdirSync(workersDir);
+        logger.info(`SESSION AGGREGATION: Found ${workerFiles.length} files in workers directory: ${workerFiles.join(', ')}`);
+        
+        // Process all worker session files
+        for (const file of workerFiles) {
+            if (file.startsWith('worker-') && file.includes('sessions') && file.endsWith('.jsonl')) {
+                const filePath = path.join(workersDir, file);
+                logger.info(`SESSION AGGREGATION: Processing session file: ${file}`);
+                
+                try {
+                    const content = fs.readFileSync(filePath, 'utf-8');
+                    const lines = content.trim().split('\n').filter(line => line.trim());
+                    logger.info(`SESSION AGGREGATION: File ${file} has ${lines.length} lines`);
+                    
+                    for (const line of lines) {
+                        try {
+                            const sessionData = JSON.parse(line);
+                            
+                            // Add worker ID to session if not present
+                            if (!sessionData.workerId) {
+                                const workerIdMatch = file.match(/worker-(\d+)-/);
+                                if (workerIdMatch) {
+                                    sessionData.workerId = workerIdMatch[1];
+                                }
+                            }
+                            
+                            sessions.push(sessionData);
+                            logger.verbose(`SESSION AGGREGATION: Added session: ${sessionData.test_name || sessionData.session_id}`);
+                        } catch (parseError) {
+                            logger.error(`SESSION AGGREGATION: Error parsing session line in ${file}: ${parseError.message}`);
+                            logger.error(`SESSION AGGREGATION: Problematic line: ${line.substring(0, 100)}...`);
+                        }
+                    }
+                } catch (readError) {
+                    logger.error(`SESSION AGGREGATION: Error reading worker session file ${file}: ${readError.message}`);
+                }
+            } else {
+                logger.verbose(`SESSION AGGREGATION: Skipping non-session file: ${file}`);
+            }
+        }
+        
+        logger.info(`SESSION AGGREGATION: Complete - ${sessions.length} sessions from worker files`);
+        
+        // Debug: Log sample session data
+        if (sessions.length > 0) {
+            logger.info(`SESSION AGGREGATION: Sample session: ${JSON.stringify(sessions[0], null, 2).substring(0, 300)}...`);
+        }
+        
+    } catch (error) {
+        logger.error(`SESSION AGGREGATION: Error during session aggregation: ${error.message}`);
+        logger.error(`SESSION AGGREGATION: Error stack: ${error.stack}`);
+    }
+    
+    return sessions;
+}
+
+/**
+ * Generate a comprehensive API upload report by aggregating from all worker files
+ * This function reads all worker-specific API result files and creates a unified report
  */
 function generateApiUploadReport() {
     try {
-        const apiErrors = global._urlTrackerApiErrors || [];
-        const apiSuccesses = global._urlTrackerApiSuccesses || [];
-        const cleanupCalls = global._urlTrackerCleanupCalls || [];
-        const apiSkips = global._urlTrackerApiSkips || [];
+        // Aggregate data from all worker files
+        const aggregatedData = aggregateWorkerApiResults();
+        const { apiErrors, apiSuccesses, apiSkips, cleanupCalls } = aggregatedData;
         
         // Debug logging to help identify issues
-        logger.verbose(`=== API UPLOAD REPORT DEBUG ===`);
+        logger.verbose(`=== API UPLOAD REPORT DEBUG (AGGREGATED) ===`);
         logger.verbose(`API Upload Report Debug: Found ${apiErrors.length} errors, ${apiSuccesses.length} successes, ${apiSkips.length} skips`);
         logger.verbose(`Cleanup calls made: ${cleanupCalls.length}`);
-        logger.verbose(`Global API errors object exists: ${!!global._urlTrackerApiErrors}`);
-        logger.verbose(`Global API successes object exists: ${!!global._urlTrackerApiSuccesses}`);
-        logger.verbose(`Global API skips object exists: ${!!global._urlTrackerApiSkips}`);
+        logger.verbose(`Workers found: ${aggregatedData.workersFound}`);
+        logger.verbose(`Total files processed: ${aggregatedData.filesProcessed}`);
         
         // Show cleanup call details
         if (cleanupCalls.length > 0) {
-            logger.verbose(`Cleanup calls details:`);
+            logger.verbose(`Cleanup calls details (aggregated from all workers):`);
             cleanupCalls.forEach((call, index) => {
-                logger.verbose(`  ${index + 1}. ${call.testName} - API Upload: ${call.apiUploadEnabled}, Has Uploader: ${call.hasApiUploader}, Results: ${call.trackingResultsCount}`);
+                logger.verbose(`  ${index + 1}. ${call.testName} (Worker ${call.workerId}) - API Upload: ${call.apiUploadEnabled}, Has Uploader: ${call.hasApiUploader}, Results: ${call.trackingResultsCount}`);
             });
         } else {
             logger.verbose(`NO CLEANUP CALLS DETECTED! This means cleanup() method was never called.`);
@@ -2394,20 +3756,21 @@ function generateApiUploadReport() {
             logger.verbose(`Make sure you are using createUrlTrackerFixture() and test.use(fixture).`);
         }
         
-        // Show actual contents
-        if (global._urlTrackerApiErrors) {
-            logger.verbose(`API Errors content: ${JSON.stringify(global._urlTrackerApiErrors, null, 2)}`);
+        // Show aggregated contents summary
+        if (apiErrors.length > 0) {
+            logger.verbose(`API Errors summary: ${apiErrors.length} errors across workers`);
+            if (logger.verboseMode) {
+                apiErrors.forEach((error, index) => {
+                    logger.verbose(`  Error ${index + 1}: ${error.testName} (Worker ${error.workerId}) - ${error.error}`);
+                });
+            }
         }
-        if (global._urlTrackerApiSuccesses) {
-            logger.verbose(`API Successes content: ${JSON.stringify(global._urlTrackerApiSuccesses, null, 2)}`);
+        if (apiSuccesses.length > 0) {
+            logger.verbose(`API Successes summary: ${apiSuccesses.length} successes across workers`);
         }
-        if (global._urlTrackerApiSkips) {
-            logger.verbose(`API Skips content: ${JSON.stringify(global._urlTrackerApiSkips, null, 2)}`);
+        if (apiSkips.length > 0) {
+            logger.verbose(`API Skips summary: ${apiSkips.length} skips across workers`);
         }
-        
-        // Show all global properties related to URL tracker
-        const globalKeys = Object.keys(global).filter(key => key.includes('urlTracker') || key.includes('UrlTracker'));
-        logger.verbose(`All URL tracker related global keys: ${JSON.stringify(globalKeys)}`);
         
         // Count total tests that attempted API upload
         const totalApiAttempts = apiErrors.length + apiSuccesses.length;
@@ -2486,6 +3849,119 @@ function generateApiUploadReport() {
             throw error;
         } else {
             logger.error('Error generating API upload report:', error);
+        }
+    }
+}
+
+/**
+ * IMPROVED: Generate API upload report with coordination awareness
+ * This version includes information about active uploads and provides better coordination
+ */
+function generateApiUploadReportWithCoordination() {
+    try {
+        logger.info('🔗 URL TRACKER - COORDINATED API UPLOAD REPORT');
+        
+        // Check for active uploads
+        const activeUploads = global._activeApiUploads ? global._activeApiUploads.size : 0;
+        if (activeUploads > 0) {
+            logger.warn(`⚠️  ${activeUploads} API uploads still active during report generation`);
+            
+            // Log details of active uploads
+            if (global._activeApiUploads) {
+                for (const [uploadId, upload] of global._activeApiUploads) {
+                    const duration = Date.now() - upload.startTime;
+                    const status = upload.status || 'unknown';
+                    logger.warn(`  Active: ${uploadId} (${upload.testName}, ${duration}ms elapsed, status: ${status})`);
+                }
+            }
+        }
+        
+        // Aggregate data from all worker files
+        const aggregatedData = aggregateWorkerApiResults();
+        const { apiErrors, apiSuccesses, apiSkips, cleanupCalls } = aggregatedData;
+        
+        // Enhanced debugging with coordination info
+        logger.verbose(`=== COORDINATED API UPLOAD REPORT DEBUG ===`);
+        logger.verbose(`Found ${apiErrors.length} errors, ${apiSuccesses.length} successes, ${apiSkips.length} skips`);
+        logger.verbose(`Active uploads during report: ${activeUploads}`);
+        logger.verbose(`Cleanup calls made: ${cleanupCalls.length}`);
+        logger.verbose(`Workers found: ${aggregatedData.workersFound}`);
+        logger.verbose(`Total files processed: ${aggregatedData.filesProcessed}`);
+        
+        // Count total tests that attempted API upload
+        const totalApiAttempts = apiErrors.length + apiSuccesses.length;
+        
+        if (totalApiAttempts === 0 && activeUploads === 0) {
+            logger.verbose('No API upload attempts detected and no active uploads');
+            return;
+        }
+        
+        // Report results with coordination awareness
+        const totalExpected = totalApiAttempts + activeUploads;
+        logger.info(`📊 Upload Summary: ${totalExpected} total (${apiSuccesses.length} ✅, ${apiErrors.length} ❌, ${activeUploads} ⏳)`);
+        
+        if (apiSuccesses.length > 0) {
+            logger.apiUpload(`✅ Successful uploads: ${apiSuccesses.length}`);
+            if (logger.verboseMode) {
+                apiSuccesses.forEach(success => {
+                    const duration = success.duration ? `${success.duration}ms` : 'unknown duration';
+                    logger.success(`   ✓ ${success.testName} (${success.timestamp}, ${duration})`);
+                });
+            }
+        }
+        
+        if (apiErrors.length > 0) {
+            logger.error(`❌ Failed uploads: ${apiErrors.length}`);
+            apiErrors.forEach(error => {
+                logger.error(`   ✗ ${error.testName}: ${error.error} (${error.timestamp})`);
+            });
+        }
+        
+        if (activeUploads > 0) {
+            logger.warn(`⏳ In-progress uploads: ${activeUploads} (may complete in background)`);
+        }
+        
+        // Only fail the test run if there are confirmed errors and no active uploads
+        if (apiErrors.length > 0 && activeUploads === 0) {
+            logger.error('⚠️  API UPLOAD FAILURES DETECTED - TEST RUN FAILED');
+            
+            const errorMessage = `API Upload Failed: ${apiErrors.length} out of ${totalApiAttempts} tests failed to upload tracking data to LambdaTest API. ` +
+                                `Failed tests: ${apiErrors.map(e => e.testName).join(', ')}`;
+            
+            // Write coordinated error report
+            const errorReportPath = path.join(process.cwd(), 'api-upload-coordinated-error-report.json');
+            try {
+                fs.writeFileSync(errorReportPath, JSON.stringify({
+                    summary: {
+                        totalAttempts: totalApiAttempts,
+                        successful: apiSuccesses.length,
+                        failed: apiErrors.length,
+                        active: activeUploads,
+                        timestamp: new Date().toISOString(),
+                        coordination: 'enabled'
+                    },
+                    failures: apiErrors,
+                    successes: apiSuccesses,
+                    activeUploads: activeUploads > 0 ? Array.from(global._activeApiUploads.values()) : []
+                }, null, 2));
+                logger.error(`Coordinated error report saved to: ${errorReportPath}`);
+            } catch (writeError) {
+                logger.error(`Failed to write coordinated error report: ${writeError.message}`);
+            }
+            
+            throw new Error(errorMessage);
+        } else if (apiErrors.length === 0) {
+            logger.apiUpload(`✅ All completed uploads successful (${apiSuccesses.length} confirmed${activeUploads > 0 ? `, ${activeUploads} in progress` : ''})`);
+        } else if (activeUploads > 0) {
+            logger.warn(`⚠️  ${apiErrors.length} uploads failed, but ${activeUploads} still in progress - final result pending`);
+        }
+        
+    } catch (error) {
+        if (error.message.includes('API Upload Failed:')) {
+            // Re-throw API upload errors
+            throw error;
+        } else {
+            logger.error('Error generating coordinated API upload report:', error);
         }
     }
 }
@@ -2662,20 +4138,84 @@ function performGlobalUrlTrackerCleanup() {
                 logger.error('Error cleaning up duplicate sessions:', cleanupError);
             }
             
+            // Clear any pending fallback HTML report generation
+            if (global._htmlReportTimeout) {
+                clearTimeout(global._htmlReportTimeout);
+                global._htmlReportTimeout = null;
+            }
+            
+            // Generate final HTML report with aggregated sessions from all workers
+            try {
+                // Aggregate sessions from all worker files
+                const aggregatedSessions = aggregateWorkerSessions();
+                
+                logger.info(`GLOBAL CLEANUP: HTML Report Debug: EnhancedHtmlReporter available: ${!!EnhancedHtmlReporter}`);
+                logger.info(`GLOBAL CLEANUP: HTML Report Debug: Aggregated sessions count: ${aggregatedSessions.length}`);
+                
+                if (EnhancedHtmlReporter && aggregatedSessions.length > 0) {
+                    logger.info(`Generating final HTML report with ${aggregatedSessions.length} sessions from ${aggregatedSessions.filter((s, i, arr) => arr.findIndex(ss => ss.workerId === s.workerId) === i).length} workers...`);
+                    
+                    // If no global reporter exists, create one
+                    if (!globalHtmlReporter) {
+                        logger.info(`GLOBAL CLEANUP: Creating new EnhancedHtmlReporter instance...`);
+                        globalHtmlReporter = new EnhancedHtmlReporter({
+                            outputDir: 'test-results',
+                            title: 'Playwright URL Tracking Report (Multi-Worker)',
+                            theme: 'dark',
+                            enableKeyboardShortcut: true,
+                            autoOpen: true, // Enable auto-open for better UX
+                            enableSearch: true,
+                            enableFilters: true,
+                            showMetrics: true,
+                            showTimeline: true
+                        });
+                        logger.info(`GLOBAL CLEANUP: EnhancedHtmlReporter instance created successfully`);
+                    }
+                    
+                    // Generate the final report with all aggregated sessions
+                    logger.info(`GLOBAL CLEANUP: Calling generateReport with ${aggregatedSessions.length} sessions...`);
+                    const htmlReportPath = globalHtmlReporter.generateReport(aggregatedSessions, 'playwright');
+                    logger.success(`Final HTML report generated with ${aggregatedSessions.length} sessions: ${htmlReportPath}`);
+                    
+                    // Show the HTML report prompt
+                    showHtmlReportPrompt(globalHtmlReporter, htmlReportPath);
+                } else if (!EnhancedHtmlReporter) {
+                    logger.warn('GLOBAL CLEANUP: EnhancedHtmlReporter not available - generating basic HTML report');
+                    // Generate a basic HTML report as fallback
+                    try {
+                        if (aggregatedSessions.length > 0) {
+                            generateBasicHtmlReport(aggregatedSessions);
+                        } else {
+                            logger.info('GLOBAL CLEANUP: No sessions for basic HTML report either');
+                        }
+                    } catch (basicError) {
+                        logger.error('GLOBAL CLEANUP: Basic HTML report generation also failed:', basicError.message);
+                    }
+                } else if (aggregatedSessions.length === 0) {
+                    logger.info('No sessions found for HTML report generation');
+                    logger.verbose('Checking for session files...');
+                    
+                    // Debug: Check what session files exist
+                    try {
+                        const workersDir = path.join(process.cwd(), 'test-results', 'workers');
+                        if (fs.existsSync(workersDir)) {
+                            const sessionFiles = fs.readdirSync(workersDir).filter(f => f.includes('sessions'));
+                            logger.verbose(`Found ${sessionFiles.length} session files: ${sessionFiles.join(', ')}`);
+                        }
+                    } catch (debugError) {
+                        logger.verbose(`Error checking session files: ${debugError.message}`);
+                    }
+                }
+            } catch (htmlError) {
+                logger.error('Error generating final HTML report:', htmlError);
+                logger.error('GLOBAL CLEANUP: HTML Error stack:', htmlError.stack);
+            }
+            
             // Generate final API upload report
             try {
                 generateApiUploadReport();
             } catch (error) {
                 logger.error('Error generating API upload report:', error);
-            }
-            
-            // Show the HTML report prompt at the very end
-            if (globalHtmlReporter) {
-                const resultsDir = path.join(process.cwd(), 'test-results');
-                const reportPath = path.join(resultsDir, 'url-tracking-report.html');
-                if (fs.existsSync(reportPath)) {
-                    showHtmlReportPrompt(globalHtmlReporter, reportPath);
-                }
             }
             
             logger.info('=== GLOBAL URL TRACKER CLEANUP COMPLETED ===');
@@ -2686,6 +4226,198 @@ function performGlobalUrlTrackerCleanup() {
             resolve();
         }
     });
+}
+
+/**
+ * Generate a basic HTML report as fallback when EnhancedHtmlReporter is not available
+ */
+function generateBasicHtmlReport(sessions) {
+    try {
+        if (!sessions || sessions.length === 0) {
+            logger.warn('No sessions available for basic HTML report');
+            return null;
+        }
+        
+        logger.info(`Generating basic HTML report with ${sessions.length} sessions...`);
+        
+        // Ensure output directory exists
+        const outputDir = path.join(process.cwd(), 'test-results');
+        if (!fs.existsSync(outputDir)) {
+            fs.mkdirSync(outputDir, { recursive: true });
+        }
+        
+        // Generate basic HTML content
+        const htmlContent = generateBasicHtmlContent(sessions);
+        
+        // Write HTML file
+        const reportPath = path.join(outputDir, 'url-tracking-basic-report.html');
+        fs.writeFileSync(reportPath, htmlContent, 'utf8');
+        
+        logger.success(`✅ Basic HTML report generated: ${reportPath}`);
+        
+        // Show notification
+        setTimeout(() => {
+            console.log('\n📄 Basic URL Tracking Report Generated!');
+            console.log(`📁 Report: ${reportPath}`);
+            console.log('💡 For enhanced features, ensure @lambdatest/sdk-utils is properly installed\n');
+        }, 100);
+        
+        return reportPath;
+        
+    } catch (error) {
+        logger.error('Error generating basic HTML report:', error.message);
+        throw error;
+    }
+}
+
+/**
+ * Generate basic HTML content for the report
+ */
+function generateBasicHtmlContent(sessions) {
+    const totalNavigations = sessions.reduce((sum, session) => sum + (session.navigations?.length || 0), 0);
+    const uniqueUrls = new Set();
+    
+    sessions.forEach(session => {
+        if (session.navigations) {
+            session.navigations.forEach(nav => {
+                if (nav.current_url && nav.current_url !== 'null') {
+                    uniqueUrls.add(nav.current_url);
+                }
+            });
+        }
+    });
+    
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LambdaTest URL Tracking Report</title>
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
+            margin: 0; 
+            padding: 20px; 
+            background: #f6f8fa; 
+            color: #24292f;
+        }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .header { 
+            background: white; 
+            padding: 24px; 
+            border-radius: 8px; 
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1); 
+            margin-bottom: 24px; 
+        }
+        .header h1 { margin: 0; color: #0969da; }
+        .stats { 
+            display: grid; 
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); 
+            gap: 16px; 
+            margin-bottom: 24px; 
+        }
+        .stat-card { 
+            background: white; 
+            padding: 20px; 
+            border-radius: 8px; 
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1); 
+            text-align: center; 
+        }
+        .stat-number { font-size: 32px; font-weight: bold; color: #0969da; }
+        .stat-label { color: #656d76; margin-top: 8px; }
+        .session { 
+            background: white; 
+            margin-bottom: 16px; 
+            border-radius: 8px; 
+            overflow: hidden; 
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1); 
+        }
+        .session-header { 
+            background: #f6f8fa; 
+            padding: 16px; 
+            border-bottom: 1px solid #d0d7de; 
+            font-weight: 600; 
+        }
+        .navigation { 
+            padding: 12px 16px; 
+            border-bottom: 1px solid #f6f8fa; 
+            display: flex; 
+            align-items: center; 
+        }
+        .navigation:last-child { border-bottom: none; }
+        .nav-arrow { margin: 0 12px; color: #656d76; }
+        .url { 
+            font-family: 'SFMono-Regular', Consolas, monospace; 
+            background: #f6f8fa; 
+            padding: 4px 8px; 
+            border-radius: 4px; 
+            font-size: 12px; 
+        }
+        .nav-type { 
+            background: #ddf4ff; 
+            color: #0969da; 
+            padding: 2px 8px; 
+            border-radius: 12px; 
+            font-size: 11px; 
+            margin-left: auto; 
+        }
+        .timestamp { color: #656d76; font-size: 11px; margin-left: 8px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔗 LambdaTest URL Tracking Report</h1>
+            <p>Generated on ${new Date().toLocaleString()}</p>
+        </div>
+        
+        <div class="stats">
+            <div class="stat-card">
+                <div class="stat-number">${sessions.length}</div>
+                <div class="stat-label">Test Sessions</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number">${totalNavigations}</div>
+                <div class="stat-label">Total Navigations</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number">${uniqueUrls.size}</div>
+                <div class="stat-label">Unique URLs</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number">${Math.round(totalNavigations / sessions.length)}</div>
+                <div class="stat-label">Avg per Session</div>
+            </div>
+        </div>
+        
+        ${sessions.map(session => `
+            <div class="session">
+                <div class="session-header">
+                    📝 ${session.test_name || 'Unknown Test'} 
+                    <span style="color: #656d76; font-weight: normal;">
+                        (${session.spec_file || 'unknown.spec.js'})
+                    </span>
+                </div>
+                ${(session.navigations || []).map(nav => `
+                    <div class="navigation">
+                        <span class="url">${nav.previous_url === 'null' ? '🏠 Start' : nav.previous_url}</span>
+                        <span class="nav-arrow">→</span>
+                        <span class="url">${nav.current_url}</span>
+                        <span class="nav-type">${nav.navigation_type || 'navigation'}</span>
+                        <span class="timestamp">${new Date(nav.timestamp).toLocaleTimeString()}</span>
+                    </div>
+                `).join('')}
+            </div>
+        `).join('')}
+        
+        <div style="text-align: center; margin-top: 40px; color: #656d76; font-size: 14px;">
+            <p>💡 For enhanced features including search, filters, and metrics dashboard, 
+               ensure @lambdatest/sdk-utils is properly installed</p>
+            <p>Generated by LambdaTest URL Tracker</p>
+        </div>
+    </div>
+</body>
+</html>`;
 }
 
 /**
