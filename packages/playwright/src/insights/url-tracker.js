@@ -17,7 +17,6 @@ try {
     // Strategy 1: Try relative path import
     const { EnhancedHtmlReporter: Reporter } = require('../../../sdk-utils');
     EnhancedHtmlReporter = Reporter;
-    console.log('✅ Enhanced HTML Reporter imported successfully (relative path)');
 } catch (e1) {
     try {
         // Strategy 2: Try direct import from @lambdatest/sdk-utils
@@ -96,16 +95,26 @@ class UrlTrackerPlugin extends EventEmitter {
             preserveHistory: options.preserveHistory ?? true,
             // API upload options
             enableApiUpload: options.enableApiUpload ?? true,
-            autoUploadOnTestEnd: options.autoUploadOnTestEnd ?? true,  // NEW: Automatic upload on test completion
+            // AUTOMATIC: Always enable autoUploadOnTestEnd when enableApiUpload is true
+            autoUploadOnTestEnd: options.enableApiUpload !== false,  // Auto-enabled when API upload is enabled
             apiEndpoint: options.apiEndpoint,
             username: options.username,
             accessKey: options.accessKey,
             verbose: options.verbose ?? false  // Default to false
         };
         
-        // DEBUG: Always log initialization info
-        logger.info(`URL Tracker initializing for: ${this.options.testName}`);
-        logger.info(`API upload enabled: ${this.options.enableApiUpload}`);
+        // Only log essential initialization info (not in verbose mode)
+        if (this.options.verbose) {
+            logger.info(`URL Tracker initializing for: ${this.options.testName}`);
+            logger.info(`API upload enabled: ${this.options.enableApiUpload}`);
+            
+            // Log auto upload status in verbose mode only
+            if (this.options.enableApiUpload && this.options.autoUploadOnTestEnd) {
+                logger.info(`Auto upload on test end: ENABLED (automatically enabled with API upload)`);
+            } else if (!this.options.enableApiUpload) {
+                logger.info(`Auto upload on test end: DISABLED (API upload is disabled)`);
+            }
+        }
         
         // Only enable verbose mode if explicitly requested
         if (this.options.verbose && !logger.verboseMode) {
@@ -162,12 +171,13 @@ class UrlTrackerPlugin extends EventEmitter {
                     retries: 2 // Allow 2 retries
                 });
                 
-                logger.success(`API uploader initialized successfully for worker ${this.workerId}`);
-                logger.verbose(`API endpoint: ${this.apiUploader.apiEndpoint || 'default'}`);
-                logger.verbose(`Username: ${username ? username.substring(0, 3) + '***' : 'not set'}`);
-                logger.verbose(`Access key: ${accessKey ? '***' + accessKey.substring(accessKey.length - 3) : 'not set'}`);
-                
-                logger.info('API uploader ready - health checks removed for better performance');
+                if (this.options.verbose) {
+                    logger.success(`API uploader initialized successfully for worker ${this.workerId}`);
+                    logger.verbose(`API endpoint: ${this.apiUploader.apiEndpoint || 'default'}`);
+                    logger.verbose(`Username: ${username ? username.substring(0, 3) + '***' : 'not set'}`);
+                    logger.verbose(`Access key: ${accessKey ? '***' + accessKey.substring(accessKey.length - 3) : 'not set'}`);
+                    logger.info('API uploader ready - health checks removed for better performance');
+                }
                 
             } catch (error) {
                 logger.error(`Failed to initialize API uploader: ${error.message}`);
@@ -357,7 +367,9 @@ class UrlTrackerPlugin extends EventEmitter {
         this.trackingResults = [];
 
         try {
-            logger.info(`Initializing URL tracker for test: ${this.options.testName}`);
+            if (this.options.verbose) {
+                logger.info(`Initializing URL tracker for test: ${this.options.testName}`);
+            }
             
             // CRITICAL: Fetch test metadata first - this must happen for every test session
             await this.fetchTestMetadataWithRetry();
@@ -400,7 +412,9 @@ class UrlTrackerPlugin extends EventEmitter {
 
             await this.setupPageListeners();
             this.isInitialized = true;
-            logger.success('URL tracker initialized successfully');
+            if (this.options.verbose) {
+                logger.success('URL tracker initialized successfully');
+            }
             
             // Force an immediate navigation check after a short delay
             setTimeout(async () => {
@@ -409,7 +423,9 @@ class UrlTrackerPlugin extends EventEmitter {
                     const normalizedCurrentUrl = this.normalizeUrl(currentPageUrl);
                     
                     if (normalizedCurrentUrl !== 'null' && normalizedCurrentUrl !== this.lastUrl) {
-                        logger.info(`Manual navigation check detected: ${normalizedCurrentUrl}`);
+                        if (this.options.verbose) {
+                            logger.info(`Manual navigation check detected: ${normalizedCurrentUrl}`);
+                        }
                         this.addTrackingResult({
                             spec_file: this.options.specFile,
                             test_name: this.options.testName,
@@ -500,8 +516,8 @@ class UrlTrackerPlugin extends EventEmitter {
                         navigation_type: navigation_type
                     });
                     
-                    // Only log navigation captures in non-verbose mode
-                    if (!logger.verboseMode) {
+                    // Only log navigation captures in verbose mode
+                    if (this.options.verbose) {
                         logger.navigation(`${oldUrl} → ${newUrl}`);
                     }
                 }
@@ -1020,9 +1036,13 @@ class UrlTrackerPlugin extends EventEmitter {
         
         try {
             this.writeWorkerApiResult(startRecord, 'start');
-            logger.info(`✅ [API TRACKED] Upload start recorded for "${this.options.testName}"`);
+            if (this.options.verbose) {
+                logger.info(`✅ [API TRACKED] Upload start recorded for "${this.options.testName}"`);
+            }
         } catch (writeError) {
-            logger.error(`❌ [API TRACKED] Failed to write start record: ${writeError.message}`);
+            if (this.options.verbose) {
+                logger.error(`❌ [API TRACKED] Failed to write start record: ${writeError.message}`);
+            }
         }
         
         try {
@@ -1037,23 +1057,31 @@ class UrlTrackerPlugin extends EventEmitter {
             }
             
             // ENHANCED: Check if ApiUploader method exists with detailed validation
-            logger.info(`[API TRACKED] Validating API uploader method availability...`);
+            if (this.options.verbose) {
+                logger.info(`[API TRACKED] Validating API uploader method availability...`);
+            }
             
             if (!this.apiUploader) {
                 throw new Error('ApiUploader instance not available - check initialization');
             }
             
             if (typeof this.apiUploader.uploadTrackingResults !== 'function') {
-                logger.error(`[API TRACKED] Available methods: ${Object.getOwnPropertyNames(this.apiUploader).join(', ')}`);
+                if (this.options.verbose) {
+                    logger.error(`[API TRACKED] Available methods: ${Object.getOwnPropertyNames(this.apiUploader).join(', ')}`);
+                }
                 throw new Error('ApiUploader.uploadTrackingResults method not available - check API uploader version');
             }
             
-            logger.info(`[API TRACKED] API uploader validated, calling uploadTrackingResults...`);
-            logger.verbose(`[API TRACKED] Upload parameters: testId=${testId}, navigationCount=${trackingData.navigations.length}`);
+            if (this.options.verbose) {
+                logger.info(`[API TRACKED] API uploader validated, calling uploadTrackingResults...`);
+                logger.verbose(`[API TRACKED] Upload parameters: testId=${testId}, navigationCount=${trackingData.navigations.length}`);
+            }
             
             // Perform the actual upload with more detailed logging and timeout protection
             const uploadStartTime = Date.now();
-            logger.info(`[API TRACKED] Starting actual upload at ${new Date(uploadStartTime).toISOString()}`);
+            if (this.options.verbose) {
+                logger.info(`[API TRACKED] Starting actual upload at ${new Date(uploadStartTime).toISOString()}`);
+            }
             
             // CRITICAL: Direct upload without timeout to ensure it completes
             const response = await this.apiUploader.uploadTrackingResults(trackingData, testId, {
@@ -1065,7 +1093,9 @@ class UrlTrackerPlugin extends EventEmitter {
             });
             const uploadDuration = Date.now() - uploadStartTime;
             
-            logger.info(`[API TRACKED] Upload completed in ${uploadDuration}ms`);
+            if (this.options.verbose) {
+                logger.info(`[API TRACKED] Upload completed in ${uploadDuration}ms`);
+            }
             
             // Record successful upload
             const successRecord = {
@@ -1100,12 +1130,16 @@ class UrlTrackerPlugin extends EventEmitter {
                 upload.duration = uploadDuration;
                 upload.response = response;
                 
-                logger.success(`✅ [API TRACKED] Upload ${uploadId} SUCCESSFUL for "${this.options.testName}" (Duration: ${uploadDuration}ms)`);
-                logger.verbose(`[API TRACKED] Response: ${JSON.stringify(response, null, 2)}`);
+                if (this.options.verbose) {
+                    logger.success(`✅ [API TRACKED] Upload ${uploadId} SUCCESSFUL for "${this.options.testName}" (Duration: ${uploadDuration}ms)`);
+                    logger.verbose(`[API TRACKED] Response: ${JSON.stringify(response, null, 2)}`);
+                }
                 
                 // CRITICAL: Remove from active uploads immediately upon completion
                 global._activeApiUploads.delete(uploadId);
-                logger.info(`[API TRACKED] Removed completed upload ${uploadId} from active uploads (${global._activeApiUploads.size} remaining)`);
+                if (this.options.verbose) {
+                    logger.info(`[API TRACKED] Removed completed upload ${uploadId} from active uploads (${global._activeApiUploads.size} remaining)`);
+                }
             }
             
             return response;
@@ -1193,8 +1227,10 @@ class UrlTrackerPlugin extends EventEmitter {
             // Use the same locking mechanism as API results
             this.writeWithLock(filePath, lockFilePath, jsonLine);
             
-            logger.info(`✅ Worker ${workerId}: Session data written to ${filePath}`);
-            logger.verbose(`  Session: ${sessionData.session_id || 'no-id'} (${sessionData.navigations?.length || 0} navigations)`);
+            if (this.options.verbose) {
+                logger.info(`✅ Worker ${workerId}: Session data written to ${filePath}`);
+                logger.verbose(`  Session: ${sessionData.session_id || 'no-id'} (${sessionData.navigations?.length || 0} navigations)`);
+            }
             
             // Verify file was written successfully
             this.verifyFileWrite(filePath, jsonLine);
@@ -1254,14 +1290,16 @@ class UrlTrackerPlugin extends EventEmitter {
         
         this.cleanupCalled = true; // Mark as cleaned up
         
-        // ENHANCED DEBUG: Log cleanup entry 
-        logger.info(`URL Tracker cleanup starting for: ${this.options.testName}`);
-        logger.verbose(`[UrlTracker] Test name: ${this.options.testName}`);
-        logger.verbose(`[UrlTracker] API upload enabled: ${this.options.enableApiUpload} (type: ${typeof this.options.enableApiUpload})`);
-        logger.verbose(`[UrlTracker] API uploader exists: ${!!this.apiUploader}`);
-        logger.verbose(`[UrlTracker] Tracking results count: ${this.trackingResults ? this.trackingResults.length : 0}`);
-        logger.verbose(`[UrlTracker] Navigation history count: ${this.navigationHistory ? this.navigationHistory.length : 0}`);
-        logger.verbose(`[UrlTracker] Test metadata exists: ${!!this.testMetadata}`);
+        // Only log cleanup info in verbose mode
+        if (this.options.verbose) {
+            logger.info(`URL Tracker cleanup starting for: ${this.options.testName}`);
+            logger.verbose(`[UrlTracker] Test name: ${this.options.testName}`);
+            logger.verbose(`[UrlTracker] API upload enabled: ${this.options.enableApiUpload} (type: ${typeof this.options.enableApiUpload})`);
+            logger.verbose(`[UrlTracker] API uploader exists: ${!!this.apiUploader}`);
+            logger.verbose(`[UrlTracker] Tracking results count: ${this.trackingResults ? this.trackingResults.length : 0}`);
+            logger.verbose(`[UrlTracker] Navigation history count: ${this.navigationHistory ? this.navigationHistory.length : 0}`);
+            logger.verbose(`[UrlTracker] Test metadata exists: ${!!this.testMetadata}`);
+        }
         
         logger.verbose(`=== CLEANUP DEBUG START ===`);
         logger.verbose(`Cleaning up URL tracker for test: ${this.options.testName}`);
@@ -1362,20 +1400,24 @@ class UrlTrackerPlugin extends EventEmitter {
             }
         }
         
-        // DEBUG: Check all conditions for API upload
-        logger.info(`=== API UPLOAD CONDITIONS CHECK ===`);
-        logger.info(`1. enableApiUpload: ${this.options.enableApiUpload}`);
-        logger.info(`2. apiUploader exists: ${!!this.apiUploader}`);
-        logger.info(`3. trackingResults.length > 0: ${this.trackingResults && this.trackingResults.length > 0}`);
-        logger.info(`4. All conditions met: ${this.options.enableApiUpload && this.apiUploader && this.trackingResults.length > 0}`);
-        logger.info(`5. Test name: "${this.options.testName}"`);
-        logger.info(`6. Worker ID: ${this.workerId}`);
-        logger.info(`7. Cleanup called flag: ${this.cleanupCalled}`);
+        // Only show API upload conditions in verbose mode
+        if (this.options.verbose) {
+            logger.info(`=== API UPLOAD CONDITIONS CHECK ===`);
+            logger.info(`1. enableApiUpload: ${this.options.enableApiUpload}`);
+            logger.info(`2. apiUploader exists: ${!!this.apiUploader}`);
+            logger.info(`3. trackingResults.length > 0: ${this.trackingResults && this.trackingResults.length > 0}`);
+            logger.info(`4. All conditions met: ${this.options.enableApiUpload && this.apiUploader && this.trackingResults.length > 0}`);
+            logger.info(`5. Test name: "${this.options.testName}"`);
+            logger.info(`6. Worker ID: ${this.workerId}`);
+            logger.info(`7. Cleanup called flag: ${this.cleanupCalled}`);
+        }
         
         // CONDITIONAL: Only upload in cleanup if not already done in afterEach, page close, or auto upload
         if (this.options.enableApiUpload && this.apiUploader && this.trackingResults.length > 0 && !this._uploadCompletedInAfterEach && !this._uploadCompletedInPageClose && !this._uploadCompleted) {
             try {
-                logger.info(`[API] Starting TRACKED API upload for "${this.options.testName}"`);
+                if (this.options.verbose) {
+                    logger.info(`[API] Starting TRACKED API upload for "${this.options.testName}"`);
+                }
                 
                 // Initialize upload tracking if not exists
                 if (!global._activeApiUploads) {
@@ -1506,44 +1548,48 @@ class UrlTrackerPlugin extends EventEmitter {
                 // Continue with cleanup even if API upload fails
             }
         } else {
-            if (this._uploadCompletedInAfterEach) {
-                logger.info(`[API] SKIPPED for "${this.options.testName}" - upload already completed in afterEach`);
-            } else if (this._uploadCompletedInPageClose) {
-                logger.info(`[API] SKIPPED for "${this.options.testName}" - upload already completed in page close`);
-            } else if (this._uploadCompleted) {
-                logger.info(`[API] SKIPPED for "${this.options.testName}" - upload already completed by auto upload`);
-            } else {
-                logger.warn(`[API] SKIPPED for "${this.options.testName}" (Worker ${this.workerId}):`);
-                logger.warn(`[API]   - API upload enabled: ${this.options.enableApiUpload}`);
-                logger.warn(`[API]   - API uploader exists: ${!!this.apiUploader}`);
-                logger.warn(`[API]   - Tracking results count: ${this.trackingResults ? this.trackingResults.length : 0}`);
-            
-            // Debug credentials if API upload is enabled but uploader doesn't exist
-            if (this.options.enableApiUpload && !this.apiUploader) {
-                const username = this.options.username || process.env.LT_USERNAME;
-                const accessKey = this.options.accessKey || process.env.LT_ACCESS_KEY;
-                logger.warn(`[API]   - Username available: ${!!username}`);
-                logger.warn(`[API]   - Access key available: ${!!accessKey}`);
-            }
-            
-            // Store the skip reason in worker-specific data
-            const skipRecord = {
-                testName: this.options.testName,
-                reason: `enableApiUpload: ${this.options.enableApiUpload}, hasUploader: ${!!this.apiUploader}, resultsCount: ${this.trackingResults ? this.trackingResults.length : 0}`,
-                timestamp: new Date().toISOString(),
-                workerId: this.workerId
-            };
-            global._workerData.apiSkips.push(skipRecord);
-            
-            // Write worker-specific skip to file immediately
-            this.writeWorkerApiResult(skipRecord, 'skip');
-            
-            logger.info(`[API] Skip recording completed for "${this.options.testName}" in worker ${this.workerId}`);
+            if (this.options.verbose) {
+                if (this._uploadCompletedInAfterEach) {
+                    logger.info(`[API] SKIPPED for "${this.options.testName}" - upload already completed in afterEach`);
+                } else if (this._uploadCompletedInPageClose) {
+                    logger.info(`[API] SKIPPED for "${this.options.testName}" - upload already completed in page close`);
+                } else if (this._uploadCompleted) {
+                    logger.info(`[API] SKIPPED for "${this.options.testName}" - upload already completed by auto upload`);
+                } else {
+                    logger.warn(`[API] SKIPPED for "${this.options.testName}" (Worker ${this.workerId}):`);
+                    logger.warn(`[API]   - API upload enabled: ${this.options.enableApiUpload}`);
+                    logger.warn(`[API]   - API uploader exists: ${!!this.apiUploader}`);
+                    logger.warn(`[API]   - Tracking results count: ${this.trackingResults ? this.trackingResults.length : 0}`);
+                    
+                    // Debug credentials if API upload is enabled but uploader doesn't exist
+                    if (this.options.enableApiUpload && !this.apiUploader) {
+                        const username = this.options.username || process.env.LT_USERNAME;
+                        const accessKey = this.options.accessKey || process.env.LT_ACCESS_KEY;
+                        logger.warn(`[API]   - Username available: ${!!username}`);
+                        logger.warn(`[API]   - Access key available: ${!!accessKey}`);
+                    }
+                    
+                    // Store the skip reason in worker-specific data
+                    const skipRecord = {
+                        testName: this.options.testName,
+                        reason: `enableApiUpload: ${this.options.enableApiUpload}, hasUploader: ${!!this.apiUploader}, resultsCount: ${this.trackingResults ? this.trackingResults.length : 0}`,
+                        timestamp: new Date().toISOString(),
+                        workerId: this.workerId
+                    };
+                    global._workerData.apiSkips.push(skipRecord);
+                    
+                    // Write worker-specific skip to file immediately
+                    this.writeWorkerApiResult(skipRecord, 'skip');
+                    
+                    logger.info(`[API] Skip recording completed for "${this.options.testName}" in worker ${this.workerId}`);
+                }
             }
         }
         
-        console.log(`[UrlTracker] === CLEANUP DEBUG END ===`);
-        logger.info(`=== CLEANUP DEBUG END ===`);
+        if (this.options.verbose) {
+            console.log(`[UrlTracker] === CLEANUP DEBUG END ===`);
+            logger.info(`=== CLEANUP DEBUG END ===`);
+        }
         
         // Before cleanup, export the results to file (existing functionality)
         this.exportResults();
@@ -1551,7 +1597,9 @@ class UrlTrackerPlugin extends EventEmitter {
         // CRITICAL: Store session data IMMEDIATELY before any API uploads to ensure it's preserved
         if (this.trackingResults && this.trackingResults.length > 0) {
             try {
-                logger.info('IMMEDIATELY storing session data for final HTML report generation...');
+                if (this.options.verbose) {
+                    logger.info('IMMEDIATELY storing session data for final HTML report generation...');
+                }
                 
                 // Create session data format expected by EnhancedHtmlReporter
                 const sessionData = {
@@ -1564,7 +1612,9 @@ class UrlTrackerPlugin extends EventEmitter {
                 };
                 
                 // CRITICAL: Write session data to worker file IMMEDIATELY (before API upload)
-                logger.info(`Writing session data immediately for "${this.options.testName}" with ${this.trackingResults.length} navigations`);
+                if (this.options.verbose) {
+                    logger.info(`Writing session data immediately for "${this.options.testName}" with ${this.trackingResults.length} navigations`);
+                }
                 this.writeWorkerSessionData(sessionData);
                 
                 // Store session data in worker-specific storage
@@ -1573,13 +1623,15 @@ class UrlTrackerPlugin extends EventEmitter {
                 }
                 global._workerData.sessions.push(sessionData);
                 
-                // Debug: Log session data details
-                logger.info(`Session data details for ${this.options.testName}:`);
-                logger.info(`  Session ID: ${sessionData.session_id}`);
-                logger.info(`  Test Name: ${sessionData.test_name || this.options.testName}`);
-                logger.info(`  Spec File: ${sessionData.spec_file}`);
-                logger.info(`  Worker ID: ${this.workerId}`);
-                logger.info(`  Worker sessions count: ${global._workerData.sessions.length}`);
+                // Debug: Log session data details only in verbose mode
+                if (this.options.verbose) {
+                    logger.info(`Session data details for ${this.options.testName}:`);
+                    logger.info(`  Session ID: ${sessionData.session_id}`);
+                    logger.info(`  Test Name: ${sessionData.test_name || this.options.testName}`);
+                    logger.info(`  Spec File: ${sessionData.spec_file}`);
+                    logger.info(`  Worker ID: ${this.workerId}`);
+                    logger.info(`  Worker sessions count: ${global._workerData.sessions.length}`);
+                }
                 
                 // Create or get the global Enhanced HTML reporter (ensure it's always available if EnhancedHtmlReporter exists)
                 if (EnhancedHtmlReporter && !globalHtmlReporter) {
@@ -1595,31 +1647,25 @@ class UrlTrackerPlugin extends EventEmitter {
                             showMetrics: true,
                             showTimeline: true
                         });
-                        logger.info('Enhanced HTML Reporter initialized successfully');
+                        if (this.options.verbose) {
+                            logger.info('Enhanced HTML Reporter initialized successfully');
+                        }
                     } catch (reporterError) {
-                        logger.error(`Failed to initialize Enhanced HTML Reporter: ${reporterError.message}`);
+                        if (this.options.verbose) {
+                            logger.error(`Failed to initialize Enhanced HTML Reporter: ${reporterError.message}`);
+                        }
                         globalHtmlReporter = null;
                     }
-                } else if (!EnhancedHtmlReporter) {
+                } else if (!EnhancedHtmlReporter && this.options.verbose) {
                     logger.verbose('Enhanced HTML Reporter not available - install @lambdatest/sdk-utils for HTML reports');
                 }
                 
-                // FALLBACK: For non-fixture usage, generate report immediately if this appears to be the last test
-                // This handles cases where the global cleanup might not be called
-                if (!global._isUsingFixtureFramework) {
-                    // Set a timeout to generate the report if no more sessions are added soon
-                    clearTimeout(global._htmlReportTimeout);
-                    global._htmlReportTimeout = setTimeout(() => {
-                        try {
-                            if (globalHtmlReporter && global._urlTrackerSessions && global._urlTrackerSessions.length > 0) {
-                                logger.info(`Generating fallback HTML report with ${global._urlTrackerSessions.length} sessions...`);
-                                const htmlReportPath = globalHtmlReporter.generateReport(global._urlTrackerSessions, 'playwright');
-                                logger.success(`Fallback HTML report generated: ${htmlReportPath}`);
-                            }
-                        } catch (error) {
-                            logger.error('Error generating fallback HTML report:', error);
-                        }
-                    }, 5000); // Wait 5 seconds before generating fallback report
+                // DISABLED: Fallback HTML report generation during individual test cleanup
+                // HTML reports and summaries are now handled only during process exit to prevent duplicates
+                // This ensures clean, single summary output when using the fixture framework
+                if (false && !global._isUsingFixtureFramework) {
+                    // This code is disabled to prevent duplicate HTML reports and summaries
+                    // The process exit handler will generate the final report and summary
                 }
                 
             } catch (htmlError) {
@@ -1628,7 +1674,9 @@ class UrlTrackerPlugin extends EventEmitter {
         }
         
         // IMMEDIATE: Complete cleanup without delays
-        logger.info(`[CLEANUP] Cleanup completed IMMEDIATELY for "${this.options.testName}"`);
+        if (this.options.verbose) {
+            logger.info(`[CLEANUP] Cleanup completed IMMEDIATELY for "${this.options.testName}"`);
+        }
         
         this.preserveHistory = true;
         await this.destroy();
@@ -2204,12 +2252,16 @@ class UrlTrackerPlugin extends EventEmitter {
         if (this.page) {
             // CRITICAL: Listen for page close event to upload BEFORE context closes
             this.page.once('close', async () => {
-                logger.info(`Page closed for test ${this.options.testName}, triggering IMMEDIATE API upload and cleanup`);
+                if (this.options.verbose) {
+                    logger.info(`Page closed for test ${this.options.testName}, triggering IMMEDIATE API upload and cleanup`);
+                }
                 
-                // IMMEDIATE API upload BEFORE any other cleanup
-                if (this.options.enableApiUpload && this.apiUploader && this.trackingResults.length > 0 && !this._uploadCompletedInPageClose) {
+                // IMMEDIATE API upload BEFORE any other cleanup (but only if auto upload hasn't already completed)
+                if (this.options.enableApiUpload && this.apiUploader && this.trackingResults.length > 0 && !this._uploadCompleted && !this._uploadCompletedInPageClose) {
                     try {
-                        logger.info(`PAGE CLOSE: Performing IMMEDIATE API upload for "${this.options.testName}"`);
+                        if (this.options.verbose) {
+                            logger.info(`PAGE CLOSE: Performing IMMEDIATE API upload for "${this.options.testName}"`);
+                        }
                         
                         // Ensure metadata is available
                         if (!this.testMetadata) {
@@ -2226,12 +2278,19 @@ class UrlTrackerPlugin extends EventEmitter {
                             new Promise((_, reject) => setTimeout(() => reject(new Error('Page close upload timeout')), 1000))
                         ]);
                         
-                        logger.success(`✅ PAGE CLOSE: API upload completed for "${this.options.testName}"`);
+                        if (this.options.verbose) {
+                            logger.success(`✅ PAGE CLOSE: API upload completed for "${this.options.testName}"`);
+                        }
+                        this._uploadCompleted = true;
                         this._uploadCompletedInPageClose = true;
                         
                     } catch (uploadError) {
-                        logger.error(`❌ PAGE CLOSE: Upload failed for "${this.options.testName}": ${uploadError.message}`);
+                        if (this.options.verbose) {
+                            logger.error(`❌ PAGE CLOSE: Upload failed for "${this.options.testName}": ${uploadError.message}`);
+                        }
                     }
+                } else if (this._uploadCompleted && this.options.verbose) {
+                    logger.info(`PAGE CLOSE: Skipping upload - auto upload already completed for "${this.options.testName}"`);
                 }
                 
                 await this.performAutoCleanup();
@@ -2242,7 +2301,9 @@ class UrlTrackerPlugin extends EventEmitter {
                 const context = this.page.context();
                 if (context) {
                     context.once('close', async () => {
-                        logger.info(`Context closed for test ${this.options.testName}, triggering automatic cleanup`);
+                        if (this.options.verbose) {
+                            logger.info(`Context closed for test ${this.options.testName}, triggering automatic cleanup`);
+                        }
                         await this.performAutoCleanup();
                     });
                 }
@@ -2450,7 +2511,9 @@ class UrlTrackerPlugin extends EventEmitter {
     // NEW METHOD: Perform automatic upload when test end is detected
     async performAutoUpload(trigger) {
         if (this._uploadCompleted || this._uploadInProgress) {
-            logger.verbose(`Auto upload skipped - already completed or in progress`);
+            if (this.options.verbose) {
+                logger.verbose(`Auto upload skipped - already completed or in progress`);
+            }
             return; // Already uploaded or in progress
         }
         
@@ -2458,10 +2521,15 @@ class UrlTrackerPlugin extends EventEmitter {
         const startTime = Date.now();
         
         try {
-            logger.info(`🚀 AUTO UPLOAD: Triggered by ${trigger} for "${this.options.testName}"`);
+            // Only show auto upload trigger in verbose mode or for important triggers
+            if (this.options.verbose || trigger === 'navigation_inactivity') {
+                logger.info(`🚀 AUTO UPLOAD: Triggered by ${trigger} for "${this.options.testName}"`);
+            }
             
             if (!this.options.enableApiUpload || !this.apiUploader || this.trackingResults.length === 0) {
-                logger.info(`AUTO UPLOAD: Skipped - conditions not met (enableApiUpload: ${this.options.enableApiUpload}, hasUploader: ${!!this.apiUploader}, results: ${this.trackingResults.length})`);
+                if (this.options.verbose) {
+                    logger.info(`AUTO UPLOAD: Skipped - conditions not met (enableApiUpload: ${this.options.enableApiUpload}, hasUploader: ${!!this.apiUploader}, results: ${this.trackingResults.length})`);
+                }
                 return;
             }
             
@@ -2474,7 +2542,9 @@ class UrlTrackerPlugin extends EventEmitter {
             const testId = ApiUploader.extractTestId(this.testMetadata, this.options);
             const uploadId = `auto_${trigger}_${this.workerId}_${Date.now()}`;
             
-            logger.info(`AUTO UPLOAD: Starting upload with ${trackingData.navigations.length} navigations`);
+            if (this.options.verbose) {
+                logger.info(`AUTO UPLOAD: Starting upload with ${trackingData.navigations.length} navigations`);
+            }
             
             // Perform immediate upload without timeout
             const result = await this.apiUploader.uploadTrackingResults(trackingData, testId, {
@@ -2486,6 +2556,7 @@ class UrlTrackerPlugin extends EventEmitter {
                 autoUpload: true
             });
             
+            // Always show successful uploads
             logger.success(`✅ AUTO UPLOAD: Completed successfully for "${this.options.testName}" (trigger: ${trigger})`);
             this._uploadCompleted = true;
             
@@ -2564,7 +2635,9 @@ class UrlTrackerPlugin extends EventEmitter {
         }
         
         try {
+            if (this.options.verbose) {
             logger.info(`Performing automatic cleanup for URL tracker: ${this.options.testName}`);
+        }
             
             // Clear test end detection first
             this.clearTestEndDetection();
@@ -2635,10 +2708,14 @@ module.exports = UrlTrackerPlugin;
  *     // other options...
  *     ...createUrlTrackerFixture({
  *       enabled: true,
+ *       enableApiUpload: true,  // This automatically enables autoUploadOnTestEnd
  *       trackHashChanges: true,
  *     }),
  *   },
  * };
+ * 
+ * // Note: When enableApiUpload is true, autoUploadOnTestEnd is automatically enabled
+ * // for optimal performance and reliability. No additional configuration needed.
  */
 module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(options = {}) {
     // Helper function to detect spec file from command line and environment
@@ -2837,13 +2914,22 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
                              'unknown.spec.js';
     const specFile = detectedSpecFile;
 
-    // Log detected configuration
-    logger.info(`URL Tracker Fixture created - Spec: ${specFile}`);
-    logger.verbose(`=== URL TRACKER FIXTURE CONFIGURATION ===`);
-    logger.verbose(`Detected spec file: ${specFile}`);
-    logger.verbose(`Options passed: ${JSON.stringify(options, null, 2)}`);
-    logger.verbose(`Verbose mode: ${options.verbose || false}`);
-    logger.verbose(`API upload enabled: ${options.enableApiUpload !== false}`);
+    // Only log configuration in verbose mode
+    if (options.verbose) {
+        logger.info(`URL Tracker Fixture created - Spec: ${specFile}`);
+        logger.verbose(`=== URL TRACKER FIXTURE CONFIGURATION ===`);
+        logger.verbose(`Detected spec file: ${specFile}`);
+        logger.verbose(`Options passed: ${JSON.stringify(options, null, 2)}`);
+        logger.verbose(`Verbose mode: ${options.verbose || false}`);
+        logger.verbose(`API upload enabled: ${options.enableApiUpload !== false}`);
+        
+        // Log automatic auto upload configuration
+        if (options.enableApiUpload !== false) {
+            logger.verbose(`Auto upload on test end: AUTOMATICALLY ENABLED (when enableApiUpload is true)`);
+        } else {
+            logger.verbose(`Auto upload on test end: DISABLED (API upload is disabled)`);
+        }
+    }
     
     // Initialize global tracker registry if it doesn't exist
     if (!global._urlTrackerRegistry) {
@@ -2870,7 +2956,9 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
         
         // Process exit handler - synchronous, no async operations allowed
         process.on('exit', () => {
+            if (logger.verboseMode) {
             logger.info('Process exit detected - performing coordinated cleanup with active upload tracking');
+        }
             try {
                 // Check for active uploads before exiting
                 const activeUploads = global._activeApiUploads ? global._activeApiUploads.size : 0;
@@ -2901,15 +2989,21 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
                 try {
                     const aggregatedSessions = aggregateWorkerSessions();
                     
-                    logger.info(`HTML Report Debug: EnhancedHtmlReporter available: ${!!EnhancedHtmlReporter}`);
-                    logger.info(`HTML Report Debug: Aggregated sessions count: ${aggregatedSessions.length}`);
+                    if (logger.verboseMode) {
+                        logger.info(`HTML Report Debug: EnhancedHtmlReporter available: ${!!EnhancedHtmlReporter}`);
+                        logger.info(`HTML Report Debug: Aggregated sessions count: ${aggregatedSessions.length}`);
+                    }
                     
                     if (EnhancedHtmlReporter && aggregatedSessions.length > 0) {
-                        logger.info(`PROCESS EXIT: Generating final HTML report with ${aggregatedSessions.length} aggregated sessions...`);
+                        if (logger.verboseMode) {
+                            logger.info(`PROCESS EXIT: Generating final HTML report with ${aggregatedSessions.length} aggregated sessions...`);
+                        }
                         
                         // Create reporter if needed
                         if (!globalHtmlReporter) {
-                            logger.info(`Creating new EnhancedHtmlReporter instance...`);
+                            if (logger.verboseMode) {
+                                logger.info(`Creating new EnhancedHtmlReporter instance...`);
+                            }
                             globalHtmlReporter = new EnhancedHtmlReporter({
                                 outputDir: 'test-results',
                                 title: 'LambdaTest Playwright URL Tracking Report (Multi-Worker)',
@@ -2921,13 +3015,19 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
                                 showMetrics: true,
                                 showTimeline: true
                             });
-                            logger.info(`EnhancedHtmlReporter instance created successfully`);
+                            if (logger.verboseMode) {
+                                logger.info(`EnhancedHtmlReporter instance created successfully`);
+                            }
                         }
                         
                         // Generate the final report with all aggregated sessions
-                        logger.info(`Calling generateReport with ${aggregatedSessions.length} sessions...`);
+                        if (logger.verboseMode) {
+                            logger.info(`Calling generateReport with ${aggregatedSessions.length} sessions...`);
+                        }
                         const htmlReportPath = globalHtmlReporter.generateReport(aggregatedSessions, 'playwright');
-                        logger.success(`PROCESS EXIT: Final HTML report generated with ${aggregatedSessions.length} sessions: ${htmlReportPath}`);
+                        if (logger.verboseMode) {
+                            logger.success(`PROCESS EXIT: Final HTML report generated with ${aggregatedSessions.length} sessions: ${htmlReportPath}`);
+                        }
                         
                         // Show the HTML report prompt
                         showHtmlReportPrompt(globalHtmlReporter, htmlReportPath);
@@ -2984,7 +3084,9 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
                 try {
                     generateApiUploadReportWithCoordination();
                 } catch (reportError) {
-                    logger.error('Error generating coordinated API upload report:', reportError);
+                    if (logger.verboseMode) {
+                        logger.error('Error generating coordinated API upload report:', reportError);
+                    }
                 }
                 
             } catch (e) {
@@ -3175,8 +3277,10 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
         workerUrlTracker: [async ({}, use, workerInfo) => {
             // This runs once per worker - setup
             const workerId = workerInfo.parallelIndex.toString(); // Use parallelIndex (0-based) for consistency
-            logger.info(`WORKER ${workerId}: URL tracker worker fixture starting`);
-            logger.verbose(`WORKER ${workerId}: Worker index: ${workerInfo.workerIndex}, Parallel index: ${workerInfo.parallelIndex}`);
+            if (options.verbose) {
+                logger.info(`WORKER ${workerId}: URL tracker worker fixture starting`);
+                logger.verbose(`WORKER ${workerId}: Worker index: ${workerInfo.workerIndex}, Parallel index: ${workerInfo.parallelIndex}`);
+            }
             
             // Set environment variables for this worker
             process.env.TEST_PARALLEL_INDEX = workerInfo.parallelIndex.toString();
@@ -3299,10 +3403,12 @@ module.exports.createUrlTrackerFixture = function createUrlTrackerFixture(option
             global._urlTrackerRegistry.trackers.set(uniqueTestId, urlTracker);
             
             try {
-                // Initialize the tracker
-                await urlTracker.init();
+                            // Initialize the tracker
+            await urlTracker.init();
+            if (options.verbose) {
                 logger.info(`URL tracker initialized for test: ${testName}`);
                 logger.info(`Tracker stored in global registry with ID: ${uniqueTestId}`);
+            }
             } catch (error) {
                 logger.error(`Error initializing URL tracker for test ${testName}:`, error);
             }
@@ -3664,26 +3770,36 @@ function aggregateWorkerSessions() {
     try {
         const workersDir = path.join(process.cwd(), 'test-results', 'workers');
         
-        logger.info(`SESSION AGGREGATION: Looking for workers directory: ${workersDir}`);
+        if (logger.verboseMode) {
+            logger.info(`SESSION AGGREGATION: Looking for workers directory: ${workersDir}`);
+        }
         
         if (!fs.existsSync(workersDir)) {
-            logger.info('SESSION AGGREGATION: No workers directory found for session aggregation');
+            if (logger.verboseMode) {
+                logger.info('SESSION AGGREGATION: No workers directory found for session aggregation');
+            }
             return sessions;
         }
         
         const workerFiles = fs.readdirSync(workersDir);
-        logger.info(`SESSION AGGREGATION: Found ${workerFiles.length} files in workers directory: ${workerFiles.join(', ')}`);
+        if (logger.verboseMode) {
+            logger.info(`SESSION AGGREGATION: Found ${workerFiles.length} files in workers directory: ${workerFiles.join(', ')}`);
+        }
         
         // Process all worker session files
         for (const file of workerFiles) {
             if (file.startsWith('worker-') && file.includes('sessions') && file.endsWith('.jsonl')) {
                 const filePath = path.join(workersDir, file);
-                logger.info(`SESSION AGGREGATION: Processing session file: ${file}`);
+                if (logger.verboseMode) {
+                    logger.info(`SESSION AGGREGATION: Processing session file: ${file}`);
+                }
                 
                 try {
                     const content = fs.readFileSync(filePath, 'utf-8');
                     const lines = content.trim().split('\n').filter(line => line.trim());
-                    logger.info(`SESSION AGGREGATION: File ${file} has ${lines.length} lines`);
+                    if (logger.verboseMode) {
+                        logger.info(`SESSION AGGREGATION: File ${file} has ${lines.length} lines`);
+                    }
                     
                     for (const line of lines) {
                         try {
@@ -3712,11 +3828,13 @@ function aggregateWorkerSessions() {
             }
         }
         
-        logger.info(`SESSION AGGREGATION: Complete - ${sessions.length} sessions from worker files`);
-        
-        // Debug: Log sample session data
-        if (sessions.length > 0) {
-            logger.info(`SESSION AGGREGATION: Sample session: ${JSON.stringify(sessions[0], null, 2).substring(0, 300)}...`);
+        if (logger.verboseMode) {
+            logger.info(`SESSION AGGREGATION: Complete - ${sessions.length} sessions from worker files`);
+            
+            // Debug: Log sample session data
+            if (sessions.length > 0) {
+                logger.info(`SESSION AGGREGATION: Sample session: ${JSON.stringify(sessions[0], null, 2).substring(0, 300)}...`);
+            }
         }
         
     } catch (error) {
@@ -3776,44 +3894,49 @@ function generateApiUploadReport() {
         const totalApiAttempts = apiErrors.length + apiSuccesses.length;
         
         if (totalApiAttempts === 0) {
-            logger.verbose('API Upload Report: No API upload attempts detected');
-            
-            if (cleanupCalls.length === 0) {
-                logger.verbose('ROOT CAUSE: cleanup() method was never called!');
-                logger.verbose('SOLUTION: Use the new self-contained fixture approach:');
-                logger.verbose('  1. Import: const { createUrlTrackerFixture } = require("@lambdatest/playwright-driver");');
-                logger.verbose('  2. Create fixture: const fixture = createUrlTrackerFixture({ enableApiUpload: true });');
-                logger.verbose('  3. Use fixture: test.use(fixture);');
-                logger.verbose('  4. Remove any manual URL tracker setup from your tests');
-            } else {
-                logger.verbose('Cleanup was called but no API uploads occurred. Possible reasons:');
-                logger.verbose('  1. API upload is disabled (enableApiUpload: false)');
-                logger.verbose('  2. No URL tracking results were generated');
-                logger.verbose('  3. API upload conditions were not met in cleanup()');
-                logger.verbose('  4. API uploader was not properly initialized');
+            // Only show detailed debug info in verbose mode
+            if (logger.verboseMode) {
+                logger.verbose('API Upload Report: No API upload attempts detected');
+                
+                if (cleanupCalls.length === 0) {
+                    logger.verbose('ROOT CAUSE: cleanup() method was never called!');
+                    logger.verbose('SOLUTION: Use the new self-contained fixture approach:');
+                    logger.verbose('  1. Import: const { createUrlTrackerFixture } = require("@lambdatest/playwright-driver");');
+                    logger.verbose('  2. Create fixture: const fixture = createUrlTrackerFixture({ enableApiUpload: true });');
+                    logger.verbose('  3. Use fixture: test.use(fixture);');
+                    logger.verbose('  4. Remove any manual URL tracker setup from your tests');
+                } else {
+                    logger.verbose('Cleanup was called but no API uploads occurred. Possible reasons:');
+                    logger.verbose('  1. API upload is disabled (enableApiUpload: false)');
+                    logger.verbose('  2. No URL tracking results were generated');
+                    logger.verbose('  3. API upload conditions were not met in cleanup()');
+                    logger.verbose('  4. API uploader was not properly initialized');
+                }
             }
             return;
         }
         
-        logger.info('🔗 URL TRACKER - API UPLOAD REPORT');
+        // Clean, concise summary
+        console.log('\n' + '='.repeat(60));
+        console.log('🔗 LambdaTest URL Tracker - Final Summary');
+        console.log('='.repeat(60));
         
         if (apiSuccesses.length > 0) {
-            logger.apiUpload(`✅ Successful uploads: ${apiSuccesses.length}`);
+            console.log(`✅ Successful uploads: ${apiSuccesses.length}`);
             if (logger.verboseMode) {
                 apiSuccesses.forEach(success => {
-                    logger.success(`   ✓ ${success.testName} (${success.timestamp})`);
+                    console.log(`   ✓ ${success.testName} (${success.timestamp})`);
                 });
             }
         }
         
         if (apiErrors.length > 0) {
-            logger.error(`❌ Failed uploads: ${apiErrors.length}`);
+            console.log(`❌ Failed uploads: ${apiErrors.length}`);
             apiErrors.forEach(error => {
-                logger.error(`   ✗ ${error.testName}: ${error.error} (${error.timestamp})`);
+                console.log(`   ✗ ${error.testName}: ${error.error}`);
             });
             
-            // If there are API upload failures, throw an error to fail the test run
-            logger.error('⚠️  API UPLOAD FAILURES DETECTED - TEST RUN FAILED');
+            console.log('\n⚠️  API UPLOAD FAILURES DETECTED');
             
             // Create a detailed error message
             const errorMessage = `API Upload Failed: ${apiErrors.length} out of ${totalApiAttempts} tests failed to upload tracking data to LambdaTest API. ` +
@@ -3832,16 +3955,20 @@ function generateApiUploadReport() {
                     failures: apiErrors,
                     successes: apiSuccesses
                 }, null, 2));
-                logger.error(`Detailed error report saved to: ${errorReportPath}`);
+                console.log(`📄 Detailed error report: ${errorReportPath}`);
             } catch (writeError) {
-                logger.error(`Failed to write error report: ${writeError.message}`);
+                console.log(`Failed to write error report: ${writeError.message}`);
             }
+            
+            console.log('='.repeat(60));
             
             // Throw error to fail the test run
             throw new Error(errorMessage);
-        } else {
-            logger.apiUpload(`✅ All ${apiSuccesses.length} API uploads completed successfully`);
+        } else if (apiSuccesses.length > 0) {
+            console.log(`🎉 All ${apiSuccesses.length} API uploads completed successfully!`);
         }
+        
+        console.log('='.repeat(60) + '\n');
         
     } catch (error) {
         if (error.message.includes('API Upload Failed:')) {
@@ -3858,12 +3985,28 @@ function generateApiUploadReport() {
  * This version includes information about active uploads and provides better coordination
  */
 function generateApiUploadReportWithCoordination() {
+    // Prevent duplicate summaries from multiple workers using file system coordination
+    const summaryLockFile = path.join(process.cwd(), 'test-results', '.summary-generated.lock');
+    
     try {
-        logger.info('🔗 URL TRACKER - COORDINATED API UPLOAD REPORT');
+        // Check if summary already generated by another worker
+        if (fs.existsSync(summaryLockFile)) {
+            return; // Another worker already generated the summary
+        }
         
+        // Create lock file to prevent other workers from generating summary
+        fs.writeFileSync(summaryLockFile, `${process.pid}-${Date.now()}`);
+    } catch (lockError) {
+        // If we can't create lock file, proceed anyway to avoid missing summary
+        if (logger.verboseMode) {
+            logger.verbose(`Could not create summary lock file: ${lockError.message}`);
+        }
+    }
+    
+    try {
         // Check for active uploads
         const activeUploads = global._activeApiUploads ? global._activeApiUploads.size : 0;
-        if (activeUploads > 0) {
+        if (activeUploads > 0 && logger.verboseMode) {
             logger.warn(`⚠️  ${activeUploads} API uploads still active during report generation`);
             
             // Log details of active uploads
@@ -3880,91 +4023,112 @@ function generateApiUploadReportWithCoordination() {
         const aggregatedData = aggregateWorkerApiResults();
         const { apiErrors, apiSuccesses, apiSkips, cleanupCalls } = aggregatedData;
         
-        // Enhanced debugging with coordination info
-        logger.verbose(`=== COORDINATED API UPLOAD REPORT DEBUG ===`);
-        logger.verbose(`Found ${apiErrors.length} errors, ${apiSuccesses.length} successes, ${apiSkips.length} skips`);
-        logger.verbose(`Active uploads during report: ${activeUploads}`);
-        logger.verbose(`Cleanup calls made: ${cleanupCalls.length}`);
-        logger.verbose(`Workers found: ${aggregatedData.workersFound}`);
-        logger.verbose(`Total files processed: ${aggregatedData.filesProcessed}`);
+        // Enhanced debugging with coordination info (verbose only)
+        if (logger.verboseMode) {
+            logger.verbose(`=== COORDINATED API UPLOAD REPORT DEBUG ===`);
+            logger.verbose(`Found ${apiErrors.length} errors, ${apiSuccesses.length} successes, ${apiSkips.length} skips`);
+            logger.verbose(`Active uploads during report: ${activeUploads}`);
+            logger.verbose(`Cleanup calls made: ${cleanupCalls.length}`);
+            logger.verbose(`Workers found: ${aggregatedData.workersFound}`);
+            logger.verbose(`Total files processed: ${aggregatedData.filesProcessed}`);
+        }
         
         // Count total tests that attempted API upload
         const totalApiAttempts = apiErrors.length + apiSuccesses.length;
         
         if (totalApiAttempts === 0 && activeUploads === 0) {
-            logger.verbose('No API upload attempts detected and no active uploads');
+            if (logger.verboseMode) {
+                logger.verbose('No API upload attempts detected and no active uploads');
+            }
             return;
         }
         
-        // Report results with coordination awareness
-        const totalExpected = totalApiAttempts + activeUploads;
-        logger.info(`📊 Upload Summary: ${totalExpected} total (${apiSuccesses.length} ✅, ${apiErrors.length} ❌, ${activeUploads} ⏳)`);
+        // Clean, bordered summary
+        console.log('\n' + '='.repeat(60));
+        console.log('🔗 LambdaTest URL Tracker - Final Summary');
+        console.log('='.repeat(60));
         
         if (apiSuccesses.length > 0) {
-            logger.apiUpload(`✅ Successful uploads: ${apiSuccesses.length}`);
+            console.log(`✅ Successful uploads: ${apiSuccesses.length}`);
             if (logger.verboseMode) {
                 apiSuccesses.forEach(success => {
                     const duration = success.duration ? `${success.duration}ms` : 'unknown duration';
-                    logger.success(`   ✓ ${success.testName} (${success.timestamp}, ${duration})`);
+                    console.log(`   ✓ ${success.testName} (${success.timestamp}, ${duration})`);
                 });
             }
         }
         
         if (apiErrors.length > 0) {
-            logger.error(`❌ Failed uploads: ${apiErrors.length}`);
+            console.log(`❌ Failed uploads: ${apiErrors.length}`);
             apiErrors.forEach(error => {
-                logger.error(`   ✗ ${error.testName}: ${error.error} (${error.timestamp})`);
+                console.log(`   ✗ ${error.testName}: ${error.error}`);
             });
         }
         
         if (activeUploads > 0) {
-            logger.warn(`⏳ In-progress uploads: ${activeUploads} (may complete in background)`);
+            console.log(`⏳ In-progress uploads: ${activeUploads} (may complete in background)`);
         }
+        
+        // Summary line
+        if (apiErrors.length === 0 && apiSuccesses.length > 0) {
+            console.log(`🎉 All ${apiSuccesses.length} API uploads completed successfully!`);
+        } else if (apiErrors.length > 0) {
+            console.log(`⚠️  ${apiErrors.length} of ${totalApiAttempts} uploads failed`);
+        }
+        
+        console.log('='.repeat(60) + '\n');
         
         // Only fail the test run if there are confirmed errors and no active uploads
         if (apiErrors.length > 0 && activeUploads === 0) {
-            logger.error('⚠️  API UPLOAD FAILURES DETECTED - TEST RUN FAILED');
-            
             const errorMessage = `API Upload Failed: ${apiErrors.length} out of ${totalApiAttempts} tests failed to upload tracking data to LambdaTest API. ` +
                                 `Failed tests: ${apiErrors.map(e => e.testName).join(', ')}`;
             
-            // Write coordinated error report
-            const errorReportPath = path.join(process.cwd(), 'api-upload-coordinated-error-report.json');
-            try {
-                fs.writeFileSync(errorReportPath, JSON.stringify({
-                    summary: {
-                        totalAttempts: totalApiAttempts,
-                        successful: apiSuccesses.length,
-                        failed: apiErrors.length,
-                        active: activeUploads,
-                        timestamp: new Date().toISOString(),
-                        coordination: 'enabled'
-                    },
-                    failures: apiErrors,
-                    successes: apiSuccesses,
-                    activeUploads: activeUploads > 0 ? Array.from(global._activeApiUploads.values()) : []
-                }, null, 2));
-                logger.error(`Coordinated error report saved to: ${errorReportPath}`);
-            } catch (writeError) {
-                logger.error(`Failed to write coordinated error report: ${writeError.message}`);
+            // Write coordinated error report (verbose only)
+            if (logger.verboseMode) {
+                const errorReportPath = path.join(process.cwd(), 'api-upload-coordinated-error-report.json');
+                try {
+                    fs.writeFileSync(errorReportPath, JSON.stringify({
+                        summary: {
+                            totalAttempts: totalApiAttempts,
+                            successful: apiSuccesses.length,
+                            failed: apiErrors.length,
+                            active: activeUploads,
+                            timestamp: new Date().toISOString(),
+                            coordination: 'enabled'
+                        },
+                        failures: apiErrors,
+                        successes: apiSuccesses,
+                        activeUploads: activeUploads > 0 ? Array.from(global._activeApiUploads.values()) : []
+                    }, null, 2));
+                    logger.error(`Coordinated error report saved to: ${errorReportPath}`);
+                } catch (writeError) {
+                    logger.error(`Failed to write coordinated error report: ${writeError.message}`);
+                }
             }
             
             throw new Error(errorMessage);
-        } else if (apiErrors.length === 0) {
-            logger.apiUpload(`✅ All completed uploads successful (${apiSuccesses.length} confirmed${activeUploads > 0 ? `, ${activeUploads} in progress` : ''})`);
-        } else if (activeUploads > 0) {
-            logger.warn(`⚠️  ${apiErrors.length} uploads failed, but ${activeUploads} still in progress - final result pending`);
         }
         
-    } catch (error) {
-        if (error.message.includes('API Upload Failed:')) {
-            // Re-throw API upload errors
-            throw error;
-        } else {
-            logger.error('Error generating coordinated API upload report:', error);
+            } catch (error) {
+            if (error.message.includes('API Upload Failed:')) {
+                // Re-throw API upload errors
+                throw error;
+            } else {
+                if (logger.verboseMode) {
+                    logger.error('Error generating coordinated API upload report:', error);
+                }
+            }
+        } finally {
+            // Clean up lock file
+            try {
+                if (fs.existsSync(summaryLockFile)) {
+                    fs.unlinkSync(summaryLockFile);
+                }
+            } catch (cleanupError) {
+                // Ignore cleanup errors
+            }
         }
     }
-}
 
 /**
  * Global cleanup function to clean up all remaining URL trackers
