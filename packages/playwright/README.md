@@ -29,7 +29,7 @@ const urlTrackerFixture = createUrlTrackerFixture({
     enabled: true,
     trackHashChanges: true,
     preserveHistory: true,
-    enableApiUpload: true  // Default: true
+    enableApiUpload: true  // Default: true (automatically enables auto upload on test end)
 });
 
 // Use the fixture in your tests
@@ -131,12 +131,14 @@ const urlTrackerFixture = createUrlTrackerFixture({
     enabled: true,                    // Enable/disable tracking
     trackHashChanges: true,           // Track hash changes
     preserveHistory: true,            // Keep history after cleanup
-    enableApiUpload: true,            // Enable API upload
+    enableApiUpload: true,            // Enable API upload (automatically enables auto upload on test end)
     apiEndpoint: 'custom-endpoint',   // Custom API endpoint
     username: 'custom-username',      // Custom username
     accessKey: 'custom-access-key'    // Custom access key
 });
 ```
+
+**Note:** When `enableApiUpload` is set to `true`, the `autoUploadOnTestEnd` feature is automatically enabled for optimal performance and reliability. This ensures uploads happen immediately when tests complete, before the browser context closes.
 
 #### Manual Global Cleanup (Optional)
 
@@ -169,7 +171,7 @@ const { UrlTrackerPlugin } = require('@lambdatest/playwright-driver');
     testName: 'my-test',
     preserveHistory: true,
     // API upload options
-    enableApiUpload: true,
+    enableApiUpload: true,  // This automatically enables autoUploadOnTestEnd
     username: process.env.LT_USERNAME,
     accessKey: process.env.LT_ACCESS_KEY
   });
