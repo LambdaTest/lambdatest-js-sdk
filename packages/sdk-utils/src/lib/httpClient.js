@@ -47,4 +47,14 @@ module.exports = new class httpClient {
             }
         })
     }
+
+    getSnapshotStatus(contextId) {
+        return this.request({
+            url: `${utils.getSmartUIServerAddress()}/snapshot/status`,
+            method: 'GET',
+            params: {
+                contextId: contextId
+            }
+        })
+    }
 };

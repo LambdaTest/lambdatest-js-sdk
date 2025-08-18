@@ -1,6 +1,7 @@
 const utils = require('@lambdatest/sdk-utils');
 const pkgName = require('../package.json').name;
 const testType = 'js-selenium-driver';
+const crypto = require('crypto');
 
 async function smartuiSnapshot(driver, name, options = {}) {
     if (!driver) throw new Error('An instance of the selenium driver object is required.');
@@ -25,10 +26,29 @@ async function smartuiSnapshot(driver, name, options = {}) {
             url: document.URL
         }), {});
 
-        let { body } = await utils.postSnapshot({url, name, dom, options}, pkgName);
-        if (body && body.data && body.data.warnings?.length !== 0) body.data.warnings.map(e => log.warn(e));
-
-        log.info(`Snapshot captured: ${name}`);
+        console.log("DOM Serialized");
+        console.log("options",options);
+        if(options?.sync){
+            options.contextId = crypto.randomUUID();
+            let { body } = await utils.postSnapshot({url, name, dom, options}, pkgName);
+            if (body && body.data && body.data.warnings?.length !== 0) body.data.warnings.map(e => log.warn(e));
+            log.info(`Snapshot captured: ${name}`);
+            let snapshotStatus = await utils.getSnapshotStatus(options.contextId);
+            console.log("snapshotStatus----->",snapshotStatus);
+            console.log("snapshotStatus.body----->",snapshotStatus.body);
+            console.log("snapshotStatus.body.data----->",snapshotStatus.body?.data);
+            // if(snapshotStatus.body?.data?.status === "success"){
+            //     console.log("Snapshot completed: ",name);
+            // }
+            // else{
+            //     console.log(`Snapshot in progress: ${name}`);
+            // }
+        }
+        else{
+            let { body } = await utils.postSnapshot({url, name, dom, options}, pkgName);
+            if (body && body.data && body.data.warnings?.length !== 0) body.data.warnings.map(e => log.warn(e));
+            log.info(`Snapshot captured: ${name}`);
+        }
     } catch (error) {
         log.error(`SmartUI snapshot failed "${name}"`);
         log.error(error);

@@ -36,8 +36,18 @@ async function postSnapshot(snapshot, testType) {
     }
 }
 
+async function getSnapshotStatus(contextId) {
+    try {
+        return await client.getSnapshotStatus(contextId);
+    } catch (error) {
+        log.debug(error);
+        throw new Error(`get snapshot status failed; ${error.message}`);
+    }
+}
+
 module.exports = {
     isSmartUIRunning,
     fetchDOMSerializer,
-    postSnapshot
+    postSnapshot,
+    getSnapshotStatus
 }
