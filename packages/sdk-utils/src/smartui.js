@@ -36,9 +36,9 @@ async function postSnapshot(snapshot, testType) {
     }
 }
 
-async function getSnapshotStatus(contextId) {
+async function getSnapshotStatus(contextId,timeout=600) {
     try {
-        return await client.getSnapshotStatus(contextId);
+        return await client.getSnapshotStatus(contextId,timeout);
     } catch (error) {
         log.debug(error);
         throw new Error(`get snapshot status failed; ${error.message}`);
