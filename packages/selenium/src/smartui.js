@@ -25,9 +25,7 @@ async function smartuiSnapshot(driver, name, options = {}) {
             dom: SmartUIDOM.serialize(options),
             url: document.URL
         }), {});
-
-        console.log("DOM Serialized");
-        console.log("options",options);
+        
         if(options?.sync){
             options.contextId = crypto.randomUUID();
             let { body } = await utils.postSnapshot({url, name, dom, options}, pkgName);
