@@ -31,8 +31,7 @@ async function smartuiSnapshot(driver, name, options = {}) {
             let { body } = await utils.postSnapshot({url, name, dom, options}, pkgName);
             if (body && body.data && body.data.warnings?.length !== 0) body.data.warnings.map(e => log.warn(e));
             log.info(`Snapshot captured: ${name}`);
-            let timeout = options?.timeout || 600;
-            let snapshotStatus = await utils.getSnapshotStatus(options.contextId,timeout);
+            let snapshotStatus = await utils.getSnapshotStatus(options.contextId,name,options?.timeout);
             return snapshotStatus.body;
         }
         else{
