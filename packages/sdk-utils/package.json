@@ -1,6 +1,6 @@
 {
   "name": "@lambdatest/sdk-utils",
-  "version": "1.0.8",
+  "version": "1.0.7",
   "description": "LambdaTest driver utils",
   "main": "index.js",
   "repository": {

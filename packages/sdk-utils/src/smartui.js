@@ -36,18 +36,8 @@ async function postSnapshot(snapshot, testType) {
     }
 }
 
-async function getSnapshotStatus(contextId,snapshotName,pollTimeout=600) {
-    try {
-        return await client.getSnapshotStatus(contextId,snapshotName,pollTimeout);
-    } catch (error) {
-        log.debug(error);
-        throw new Error(`get snapshot status failed; ${error.message}`);
-    }
-}
-
 module.exports = {
     isSmartUIRunning,
     fetchDOMSerializer,
-    postSnapshot,
-    getSnapshotStatus
+    postSnapshot
 }
