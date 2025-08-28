@@ -1,7 +1,7 @@
 {
 	"name": "@lambdatest/playwright-driver",
 	"version": "1.0.6",
-	"description": "Playwright driver for all Lambdatest functionalities",
+	"description": "Playwright driver for all Lambdatest functionalities including URL tracking and SmartUI integration",
 	"main": "index.js",
 	"repository": {
 		"type": "git",
@@ -17,7 +17,9 @@
 	},
 	"keywords": [
 		"lambdatest",
-		"playwright"
+		"playwright",
+		"url-tracker",
+		"smartui"
 	],
 	"author": "LambdaTest <keys@lambdatest.com>",
 	"license": "MIT",
