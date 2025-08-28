@@ -1,7 +1,7 @@
 const https = require("https");
 const http = require("http");
 const { URL } = require("url");
-const { loggerInsights: logger } = require("./insights-logger");
+const { logger } = require("./insights-logger");
 
 /**
  * Framework-agnostic API uploader for LambdaTest Insights
@@ -10,7 +10,7 @@ const { loggerInsights: logger } = require("./insights-logger");
 class ApiUploader {
   constructor(options = {}) {
     this.apiEndpoint =
-    options.apiEndpoint ||
+      options.apiEndpoint ||
       "https://stage-api.lambdatestinternal.com/insights/api/v3/queue";
 
     // Get auth credentials from environment variables or options
@@ -43,31 +43,25 @@ class ApiUploader {
    */
   checkVerboseMode() {
     // Check environment variables
-    const debugUrlTracker = process.env.DEBUG_URL_TRACKER === "true";
-    const debugColors = process.env.DEBUG_COLORS === "1";
-    const debugApiUploader = process.env.DEBUG_API_UPLOADER === "true";
-    const apiVerbose = process.env.API_VERBOSE === "true";
-    const verbose = process.env.VERBOSE === "true";
+    const debugUrlTracker = process.env.DEBUG_URL_TRACKER === 'true';
+    const debugColors = process.env.DEBUG_COLORS === '1';
+    const debugApiUploader = process.env.DEBUG_API_UPLOADER === 'true';
+    const apiVerbose = process.env.API_VERBOSE === 'true';
+    const verbose = process.env.VERBOSE === 'true';
 
     // Determine if verbose mode is enabled by any method
-    const isVerboseEnabled =
-      debugUrlTracker || debugApiUploader || apiVerbose || verbose;
+    const isVerboseEnabled = debugUrlTracker || debugApiUploader || apiVerbose || verbose;
 
-    console.log("[ApiUploader] Verbose mode detection:");
-    console.log("  Result:", isVerboseEnabled);
+    console.log('[ApiUploader] Verbose mode detection:');
+    console.log('  Result:', isVerboseEnabled);
     if (isVerboseEnabled) {
-      console.log(
-        "  Enabled by:",
-        [
-          debugUrlTracker && "environment variable DEBUG_URL_TRACKER=true",
-          debugColors && "dynamic debug env var DEBUG_COLORS=1",
-          debugUrlTracker && "dynamic debug env var DEBUG_URL_TRACKER=true",
-          apiVerbose && "API_VERBOSE=true",
-          verbose && "VERBOSE=true",
-        ]
-          .filter(Boolean)
-          .join(", ")
-      );
+        console.log('  Enabled by:', [
+            debugUrlTracker && 'environment variable DEBUG_URL_TRACKER=true',
+            debugColors && 'dynamic debug env var DEBUG_COLORS=1',
+            debugUrlTracker && 'dynamic debug env var DEBUG_URL_TRACKER=true',
+            apiVerbose && 'API_VERBOSE=true',
+            verbose && 'VERBOSE=true'
+        ].filter(Boolean).join(', '));
     }
 
     return isVerboseEnabled;
@@ -201,9 +195,7 @@ class ApiUploader {
         logger.apiUpload("Upload successful");
         if (this.verboseMode) {
           logger.apiUpload(
-            `✅ Upload completed on attempt ${attempt}/${this.retryAttempts}`,
-            `Response status: ${response.statusCode}`,
-            `Response body: ${JSON.stringify(response.body, null, 2)}`
+            `✅ Upload completed on attempt ${attempt}/${this.retryAttempts}`
           );
         }
         return response;
