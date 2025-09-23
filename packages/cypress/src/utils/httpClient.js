@@ -1,4 +1,3 @@
-const { cylog } = require('./logger');
 const utils = require('./utils');
 
 module.exports = new class httpClient {

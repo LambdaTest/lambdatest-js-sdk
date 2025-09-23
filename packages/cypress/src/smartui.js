@@ -9,10 +9,12 @@ function smartuiSnapshot(name, options = {}) {
 
     return cy.then({ timeout: CY_TIMEOUT }, async () => {
         if (Cypress.config('isInteractive') && !Cypress.config('enableSmartUIInteractiveMode')) {
-            return cylog('smartuiSnapshot', 'Disabled in interactive mode', {
-                details: 'use "cypress run" instead of "cypress open"',
-                snapshot: name,
-            });
+            // return cylog('smartuiSnapshot', 'Disabled in interactive mode', {
+            //     details: 'use "cypress run" instead of "cypress open"',
+            //     snapshot: name,
+            // });
+            cy.task('log', log('info', 'SmartUI snapshot skipped in interactive mode; use "cypress run" instead of "cypress open"'));
+            return;
         }
     
         let resp = await client.isSmartUIRunning()
@@ -34,7 +36,7 @@ function smartuiSnapshot(name, options = {}) {
                     if (resp.body.data.warnings.length) {
                         resp.body.data.warnings.map(e => cy.task('log', log('warn', e)));
                     }
-                    cylog('smartuiSnapshot', `Snapshot captured: ${name}`);
+                    // cylog('smartuiSnapshot', `Snapshot captured: ${name}`);
                     cy.task('log', log('info', `Snapshot captured: ${name}`));
                 } else {
                     throw new Error(resp.body.error.message);
