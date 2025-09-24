@@ -1,15 +1,6 @@
 const chalk = require('chalk');
 const pkgName = require('../../package.json').name;
 
-function cylog(name, message, meta = {}) {
-    return Cypress.log({
-      name,
-      message,
-      displayName: pkgName,
-      consoleProps: () => meta
-    });
-}
-
 function log(level, message) {
     if (typeof message === 'object') {
         message = JSON.stringify(message);
@@ -29,6 +20,5 @@ function log(level, message) {
 }
 
 module.exports = {
-    cylog,
     log
 }
