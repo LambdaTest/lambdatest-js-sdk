@@ -1,6 +1,6 @@
 {
   "name": "@lambdatest/cypress-driver",
-  "version": "1.0.9-beta.0",
+  "version": "1.0.9-beta.1",
   "description": "Cypress driver for all Lambdatest functionalities",
   "main": "index.js",
   "types": "types/index.d.ts",
