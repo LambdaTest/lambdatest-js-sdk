@@ -1,4 +1,4 @@
-const { log } = require('./utils/logger');
+// const { log } = require('./utils/logger');
 const client = require('./utils/httpClient');
 const testType = 'cypress-driver';
 const CY_TIMEOUT = 30 * 1000 * 1.5;
@@ -9,7 +9,7 @@ function smartuiSnapshot(name, options = {}) {
 
     return cy.then({ timeout: CY_TIMEOUT }, async () => {
         if (Cypress.config('isInteractive') && !Cypress.config('enableSmartUIInteractiveMode')) {
-            cy.task('log', log('info', 'SmartUI snapshot skipped in interactive mode; use "cypress run" instead of "cypress open"'));
+            // cy.task('log', log('info', 'SmartUI snapshot skipped in interactive mode; use "cypress run" instead of "cypress open"'));
             return;
         }
     
@@ -29,16 +29,18 @@ function smartuiSnapshot(name, options = {}) {
                 options
             }, testType).then(resp => {
                 if (resp.status >= 200 && resp.status < 300) {
-                    if (resp.body.data.warnings.length) {
-                        resp.body.data.warnings.map(e => cy.task('log', log('warn', e)));
-                    }
-                    cy.task('log', log('info', `Snapshot captured: ${name}`));
+                    // if (resp.body.data.warnings.length) {
+                    //     resp.body.data.warnings.map(
+                    //         // cy.task('log', log('warn', e))
+                    //     );
+                    // }
+                    // cy.task('log', log('info', `Snapshot captured: ${name}`));
                 } else {
                     throw new Error(resp.body.error.message);
                 }
             }).catch(error => {
-                cy.task('log', log('error', `SmartUI snapshot failed "${name}"`));
-                cy.task('log', log('error', error.message));
+                // cy.task('log', log('error', `SmartUI snapshot failed "${name}"`));
+                // cy.task('log', log('error', error.message));
             });
         });
     });
