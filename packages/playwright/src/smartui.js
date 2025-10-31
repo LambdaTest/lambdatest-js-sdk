@@ -9,6 +9,35 @@ async function smartuiSnapshot(page, name, options = {}) {
 
 	let log = utils.logger(pkgName);
 	try {
+		if (process.env.UPLOAD_SDK_SCREENSHOT) {
+			try {
+				const screenshotBuffer = await page.screenshot({ fullPage: true });
+				const screenshotBlob = new Blob([screenshotBuffer], { type: 'image/png' });
+				const form = new FormData();
+				form.append('screenshotName', name);
+				form.append('uploadToS3Only', true);
+				form.append('buildId', process.env.SMARTUI_BUILD_ID || '');
+				form.append('screenshot', screenshotBlob, {
+					filename: `${name.replace(/[^a-z0-9]/gi, '_')}.png`,
+					contentType: 'image/png',
+				});
+				const uploadUrl = 'https://api.lambdatest.com/visualui/1.0/screenshot';
+				let response;
+				try {
+					response = await fetch(uploadUrl, {
+						method: 'POST',
+						headers: {
+							projectToken: process.env.PROJECT_TOKEN || '',
+						},
+						body: form,
+					});
+				} catch (uploadError) {
+					
+				}
+			} catch (screenshotError) {
+
+			}
+		}
 		const resp = await utils.fetchDOMSerializer();
 		await page.evaluate(resp.body.data.dom);
 
@@ -27,7 +56,7 @@ async function smartuiSnapshot(page, name, options = {}) {
 		log.info(`Snapshot captured: ${name}`);
 	} catch (error) {
 		log.error(`SmartUI snapshot failed "${name}"`);
-        log.error(error);
+		log.error(error);
 	}
 }
 
