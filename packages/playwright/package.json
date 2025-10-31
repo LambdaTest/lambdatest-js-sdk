@@ -1,6 +1,6 @@
 {
 	"name": "@lambdatest/playwright-driver",
-	"version": "1.0.6",
+	"version": "1.0.7",
 	"description": "Playwright driver for all Lambdatest functionalities",
 	"main": "index.js",
 	"repository": {
