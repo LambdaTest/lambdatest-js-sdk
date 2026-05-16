@@ -1,207 +1,144 @@
-# LambdaTest Playwright SDK
+# LambdaTest JS SDK for TestMu AI (Formerly LambdaTest)
 
-The LambdaTest Playwright SDK enables you to integrate LambdaTest's Smart UI testing capabilities with your Playwright test suites. This SDK allows you to capture visual snapshots of your web applications for visual regression testing.
+<p align="center">
+  <a href="https://www.testmuai.com/"><img src="https://img.shields.io/badge/MADE%20BY%20TestMu%20AI-000000.svg?style=for-the-badge&labelColor=000" alt="Made by TestMu AI"></a>
+  <a href="https://www.npmjs.com/package/@lambdatest/playwright-driver"><img src="https://img.shields.io/npm/v/@lambdatest/playwright-driver.svg?style=for-the-badge&labelColor=000000" alt="npm version"></a>
+  <a href="https://community.testmuai.com/"><img src="https://img.shields.io/badge/Join%20the%20community-blueviolet.svg?style=for-the-badge&labelColor=000000" alt="Community"></a>
+</p>
 
-## Prerequisites
+## Getting Started
 
-- Node.js (v12 or higher)
-- Playwright (v1 or higher)
-- LambdaTest account with Smart UI access
+[TestMu AI](https://www.testmuai.com/) (Formerly LambdaTest) is the world's first full-stack AI Agentic Quality Engineering platform that empowers teams to test intelligently, smarter, and ship faster. Built for scale, it offers a full-stack testing cloud with 10K+ real devices and 3,000+ browsers. With AI-native test management, MCP servers, and agent-based automation, TestMu AI supports Selenium, Appium, Playwright, and all major frameworks. 
 
-## Installation
+With TestMu AI (Formerly LambdaTest), you can integrate SmartUI visual regression testing into your JavaScript test suites — with dedicated SDK packages for Playwright, Cypress, Selenium, WebdriverIO, Puppeteer, and TestCafe — capturing and comparing visual snapshots across builds.
 
-1. Install the LambdaTest Playwright SDK using npm:
+- [Sign up on TestMu AI](https://www.testmuai.com/register/) (Formerly LambdaTest).
+- Follow the [TestMu AI Documentation](https://www.testmuai.com/support/docs/) for the full setup walkthrough.
+
+### Prerequisites
+
+- Node.js 12 or higher
+- npm or yarn
+- A TestMu AI (Formerly LambdaTest) account with your username and access key
+
+### Setup
+
+Clone and install dependencies:
+
+```bash
+git clone https://github.com/LambdaTest/lambdatest-js-sdk && cd lambdatest-js-sdk
+```
+
+Install the package for your framework (example: Playwright):
 
 ```bash
 npm install @lambdatest/playwright-driver
 ```
 
-Or using yarn:
+Set your credentials as environment variables.
+
+**macOS / Linux:**
 
 ```bash
-yarn add @lambdatest/playwright-driver
+export LT_USERNAME="YOUR_USERNAME"
+export LT_ACCESS_KEY="YOUR_ACCESS_KEY"
 ```
 
-## Configuration
-
-1. Set up your LambdaTest credentials as environment variables:
+**Windows:**
 
 ```bash
-export LT_USERNAME="your_username"
-export LT_ACCESS_KEY="your_access_key"
+set LT_USERNAME="YOUR_USERNAME"
+set LT_ACCESS_KEY="YOUR_ACCESS_KEY"
 ```
 
-2. Start the Smart UI server:
+### Run tests
+
+Start the SmartUI server:
 
 ```bash
 npx smartui start
 ```
 
-## Usage
-
-Here's how to use the SDK in your Playwright tests:
+Use the SDK in your Playwright tests:
 
 ```javascript
 const { smartuiSnapshot } = require('@lambdatest/playwright-driver');
 
 test('should capture homepage snapshot', async ({ page }) => {
-  // Navigate to your application
   await page.goto('https://your-app.com');
-  
-  // Capture a snapshot
   await smartuiSnapshot(page, 'homepage');
 });
 ```
 
-### Advanced Usage
+View results on your TestMu AI dashboard.
 
-The `smartuiSnapshot` function provides various options to customize your visual testing experience. These options are organized into the following categories:
+### Local testing with TestMu AI Tunnel
 
-#### 1. Element Selection Options
-These options help you control which elements are included or excluded from your snapshots.
+To test locally hosted apps, set up the TestMu AI tunnel. OS-specific guides:
 
-```javascript
-await smartuiSnapshot(page, 'homepage', {
-  // Ignore specific elements from the snapshot
-  // Useful for excluding dynamic or temporary content
-  ignoreElements: [
-    '.dynamic-content',  // CSS selector
-    '#temporary-banner'  // CSS selector
-  ],
-  
-  // Capture only specific elements
-  // Useful for focusing on particular components
-  captureElements: [
-    '.main-content',     // CSS selector
-    '#header'           // CSS selector
-  ]
-});
+- [Local Testing on Windows](https://www.testmuai.com/support/docs/local-testing-for-windows/)
+- [Local Testing on macOS](https://www.testmuai.com/support/docs/local-testing-for-macos/)
+- [Local Testing on Linux](https://www.testmuai.com/support/docs/local-testing-for-linux/)
+
+Add the following to your capabilities:
+
+```js
+tunnel: true,
 ```
 
-#### 2. Viewport and Display Options
-Control how your page is rendered and captured.
+### Avoid timeouts with `pseudoActivityInterval`
 
-```javascript
-await smartuiSnapshot(page, 'homepage', {
-  // Set the viewport size for the snapshot
-  // Useful for testing responsive designs
-  viewport: {
-    width: 1920,
-    height: 1080
-  },
-  
-  // Set the device scale factor
-  // Useful for testing high-DPI displays
-  deviceScaleFactor: 2,
-  
-  // Set the snapshot background color
-  // Useful for transparent backgrounds
-  backgroundColor: '#ffffff'
-});
+TestMu AI aborts test sessions if the machine is held idle for 90+ seconds. To keep sessions alive, send a heartbeat:
+
+```js
+customLaunchers: {
+  chrome: {
+    pseudoActivityInterval: 5000 // 5s heartbeat
+  }
+}
 ```
 
-#### 3. Image Quality Options
-Control the quality and format of the captured snapshots.
+The default is `0` (disabled). Set any value above `0` to enable.
 
-```javascript
-await smartuiSnapshot(page, 'homepage', {
-  // Set the snapshot quality (0-100)
-  // Higher values mean better quality but larger file size
-  quality: 90,
+## Contributions
+
+Contributions are welcome. Open an issue to discuss your idea before submitting a pull request. When reporting bugs, include your Node.js version, OS, and npm version.
+
+## TestMu AI (Formerly LambdaTest) Community
+
+Connect with testers and developers in the [TestMu AI Community](https://community.testmuai.com/). Ask questions, share what you are building, and discuss best practices in test automation and DevOps.
   
-  // Set the snapshot format (png or jpeg)
-  // PNG for lossless quality, JPEG for smaller file size
-  format: 'png',
+## TestMu AI (Formerly LambdaTest) Certifications
+
+Earn free [TestMu AI Certifications](https://www.testmuai.com/certifications/) for testers, developers, and QA engineers. Validate your skills in Selenium, Cypress, Playwright, Appium, Espresso and more. Industry-recognized, shareable on LinkedIn, and built by practitioners, not marketers.
+
+## Learning Resources by TestMu AI (Formerly LambdaTest)
+
+Learn modern testing through tutorials, guides, videos, and weekly updates:
+
+* [TestMu AI Blog](https://www.testmuai.com/blog/)
+* [TestMu AI Learning Hub](https://www.testmuai.com/learning-hub/)
+* [TestMu AI on YouTube](https://www.youtube.com/@TestMuAI)
+* [TestMu AI Newsletter](https://www.testmuai.com/newsletter/)
   
-  // Set the snapshot compression level (0-9)
-  // Higher values mean more compression but lower quality
-  compression: 6
-});
-```
+## LambdaTest is Now TestMu AI
 
-#### 4. Region Control Options
-Define specific regions to capture or modify in your snapshots.
+On **January 12, 2026**, [LambdaTest evolved to TestMu AI](https://www.testmuai.com/lambdatest-is-now-testmuai/), the world's first fully autonomous **Agentic AI Quality Engineering Platform**.
 
-```javascript
-await smartuiSnapshot(page, 'homepage', {
-  // Set the snapshot clip region
-  // Useful for capturing specific parts of the page
-  clip: {
-    x: 0,
-    y: 0,
-    width: 800,
-    height: 600
-  },
-  
-  // Set the snapshot mask regions
-  // Useful for hiding sensitive information
-  mask: [
-    {
-      x: 100,
-      y: 100,
-      width: 200,
-      height: 200
-    }
-  ],
-  
-  // Set the snapshot overlay regions
-  // Useful for highlighting specific areas
-  overlay: [
-    {
-      x: 300,
-      y: 300,
-      width: 100,
-      height: 100,
-      color: '#ff0000'
-    }
-  ]
-});
-```
+Same team. Same infrastructure. Same customer accounts. All existing LambdaTest logins, scripts, capabilities, and integrations continue to work without change.
 
-#### 5. Annotation Options
-Add annotations to your snapshots for better documentation.
+Find the new home for [LambdaTest](https://www.testmuai.com).
 
-```javascript
-await smartuiSnapshot(page, 'homepage', {
-  // Set the snapshot annotations
-  // Useful for adding notes and highlights
-  annotations: [
-    {
-      type: 'text',
-      text: 'Important Section',
-      x: 400,
-      y: 400
-    }
-  ]
-});
-```
+### How LambdaTest Evolved into TestMu AI
 
-#### 6. Performance Options
-Control the behavior and timing of snapshot captures.
+In 2017, we launched LambdaTest with a simple mission: make testing fast, reliable, and accessible. As LambdaTest grew, we expanded into Test Intelligence, Visual Regression Testing, Accessibility Testing, API Testing, and Performance Testing, covering the full depth of the testing lifecycle.
 
-```javascript
-await smartuiSnapshot(page, 'homepage', {
-  // Set the snapshot timeout (in milliseconds)
-  // Useful for handling slow-loading content
-  timeout: 30000
-});
-```
+As software development entered the AI era, testing had to evolve, too. We rebuilt the architecture to be AI-native from the ground up, with autonomous agents that **plan, author, execute, analyze, and optimize tests** while keeping humans in the loop. The platform integrates with your repos, CI, IDEs, and terminals, continuously learning from every code change and development signal.
 
-## Error Handling
+That evolution earned a new name: **TestMu AI**, built for an AI-first future of quality engineering. TestMu is not a new name for us. It is the name of our annual community conference, which has brought together 100,000+ quality engineers to discuss how AI would reshape testing, long before that became an industry norm. 
 
-The SDK will throw errors in the following cases:
-- If the page object is not provided
-- If the snapshot name is not provided or is not a string
-- If the Smart UI server is not running
-- If there are any issues during the snapshot capture process
+What started as a high-performance cloud testing platform has transformed into an AI-native, multi-agent system powering a connected, end-to-end quality layer. That evolution defined a new identity: LambdaTest evolved into TestMu AI, built for an AI-first future of quality engineering.
 
 ## Support
 
-For any issues or questions, please:
-1. Check the [documentation](https://www.lambdatest.com/support/docs/)
-2. Contact LambdaTest support
-3. Open an issue on the [GitHub repository](https://github.com/LambdaTest/lambdatest-js-sdk/issues)
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
+Got a question? Email [support@testmuai.com](mailto:support@testmuai.com) or chat with us 24x7 from our chat portal.
