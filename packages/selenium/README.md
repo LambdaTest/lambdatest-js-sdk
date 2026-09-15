@@ -16,7 +16,7 @@ Requires `selenium-webdriver` as a peer dependency.
 
 ## Usage
 
-See the [LambdaTest JS SDK README](https://github.com/LambdaTest/lambdatest-js-sdk#readme) for setup, credentials, tunnel configuration and running tests.
+See the [TestMu AI JS SDK README](https://github.com/LambdaTest/lambdatest-js-sdk#readme) for setup, credentials, tunnel configuration and running tests.
 
 ## Support
 
