@@ -17,6 +17,9 @@ async function smartuiSnapshot(browser, name, options = {}) {
             url: document.URL
         }), {});
 
+        // the session id links the snapshot to its LambdaTest test, as the selenium driver does
+        if (!options.sessionId && browser.sessionId) options = { ...options, sessionId: browser.sessionId };
+
         let { body } = await utils.postSnapshot({ url, name, dom, options }, testType);
         if (body && body.data && body.data.warnings?.length !== 0) body.data.warnings.map(e => log.warn(e));
 
